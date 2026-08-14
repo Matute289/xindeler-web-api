@@ -1,0 +1,61 @@
+name: check
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  # A new advisory against an unchanged dependency would otherwise go
+  # unnoticed until somebody happens to open a PR.
+  schedule:
+    - cron: "0 6 * * 1"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --all
+
+      - name: Unsafe-code policy
+        run: sh scripts/check-unsafe-policy.sh
+
+      - name: Documentation freshness
+        run: sh scripts/check-docs.sh
+
+      - name: Docker context hardening
+        run: sh scripts/check-docker-context.sh
+
+      # --deny warnings is the point: without it cargo audit exits 0 on
+      # "unmaintained" advisories, so an abandoned dependency never fails CI.
+      - name: Security audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit --deny warnings
+
+      # cargo deny understands feature resolution, so unlike cargo audit it
+      # will not flag crates that are in the lockfile but never built.
+      - name: Supply chain policy
+        run: |
+          cargo install cargo-deny --locked
+          cargo deny check advisories bans licenses sources

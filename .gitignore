@@ -1,0 +1,21 @@
+/target
+**/*.rs.bk
+
+# IDEs
+.idea
+.vscode
+
+# macOS
+.DS_Store
+
+# Secrets
+.env
+*.db
+*.db-shm
+*.db-wal
+
+# CI artifacts
+*.log
+
+# Local isolated development worktrees
+.worktrees/

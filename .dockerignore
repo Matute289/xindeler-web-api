@@ -1,0 +1,10 @@
+target
+.git
+.env
+.env.*
+*.db
+*.db-*
+*.log
+.worktrees
+.backlog
+docs

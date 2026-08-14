@@ -1,0 +1,23 @@
+services:
+  web-api:
+    container_name: xindeler-web-api-server
+    restart: unless-stopped
+    build:
+      context: .
+    image: xindeler-web-api-server:latest
+    user: "10002:10002"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:8020:8020"
+    volumes:
+      - "/opt/xindeler-web-api/data:/opt/xindeler-web-api/data:rw"
+    tmpfs:
+      - "/tmp:rw,noexec,nosuid,nodev,size=16m"
+    environment:
+      WEB_API_BIND_ADDR: "0.0.0.0:8020"
+    # Fase 1 adds `env_file: [.env]` once SMTP secrets exist. No secrets to
+    # inject yet — Fase 0 only serves /ping.
