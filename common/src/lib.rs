@@ -82,3 +82,16 @@ pub struct ChangePasswordRequest {
 pub struct DeleteAccountRequest {
     pub password_prehash: String,
 }
+
+/// No session required — this is the *forgot* your password flow, called
+/// from a logged-out browser by definition.
+#[derive(Debug, Deserialize)]
+pub struct ForgotPasswordRequest {
+    pub email: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResetPasswordRequest {
+    pub token: String,
+    pub new_password_prehash: String,
+}

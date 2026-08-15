@@ -70,7 +70,7 @@ server/   → el binario
     migrate_csv.rs             → subcomando CLI, migración one-shot CSV→SQLite
     authclient.rs              → cliente HTTP propio hacia xindeler-auth (NO xindeler-authc)
     session.rs                 → login/logout/me + resolve_session/revoke_all_sessions (reusados por account.rs)
-    account.rs                  → proxy /api/account/* (check-username/change-username/change-password/delete)
+    account.rs                  → proxy /api/account/* (check-username/change-username/change-password/delete/forgot-password/reset-password)
 ```
 
 ## Esquema de base de datos
@@ -107,7 +107,12 @@ segundo es el mismo secreto que ya usa el game server contra `xindeler-auth`, `/
 - CORS: allowlist exacta de origins (`https://xindeler.com`, `https://www.xindeler.com`, más los
   dos puertos de dev), nunca wildcard — mismo criterio que `cors_origin()` en `xindeler-auth`.
 - Anti-enumeración donde `xindeler-auth` ya lo aplica: nunca revelar por early-return si una
-  cuenta existe o tiene 2FA activo.
+  cuenta existe o tiene 2FA activo. `forgot-password` siempre responde `200 {ok:true}`.
+- Limitación conocida y aceptada (C-03): `xindeler-auth`'s `reset_password` no devuelve el `uuid`
+  que resuelve internamente, así que ese endpoint no puede revocar *todas* las sesiones de la
+  cuenta como sí hace `change-password` — el TTL de 7 días es la mitigación real; se revoca la
+  sesión actual si el llamado la trae. No pedirle a `xindeler-auth` que cambie ese contrato
+  unilateralmente (ver `.backlog/SPEC.md`).
 
 ## Convenciones
 

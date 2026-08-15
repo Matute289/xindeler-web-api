@@ -572,6 +572,118 @@ fn change_password_with_wrong_current_password_does_not_revoke_the_session() {
     assert_eq!(me.status(), 200);
 }
 
+// --- C-03: /api/account/{forgot,reset}-password proxy tests ---
+
+const FORGOT_PASSWORD_OK: (&str, u16, &str) = (
+    "/forgot-password",
+    200,
+    "If that account exists, a reset email was sent.",
+);
+const RESET_PASSWORD_OK: (&str, u16, &str) = ("/reset-password", 200, "Password updated");
+
+#[test]
+fn forgot_password_does_not_require_a_session_and_always_answers_ok() {
+    let auth = FakeAuthServer::start(&[FORGOT_PASSWORD_OK]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/account/forgot-password"))
+        .json(&json!({"email": "nobody@example.com"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(body_json(response)["ok"], true);
+}
+
+#[test]
+fn forgot_password_rejects_an_empty_email() {
+    let server = TestServer::start();
+
+    let response = Client::new()
+        .post(server.url("/api/account/forgot-password"))
+        .json(&json!({"email": ""}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 422);
+}
+
+#[test]
+fn reset_password_succeeds_without_a_session() {
+    let auth = FakeAuthServer::start(&[RESET_PASSWORD_OK]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/account/reset-password"))
+        .json(&json!({"token": "sometoken", "new_password_prehash": "newhash"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(body_json(response)["ok"], true);
+}
+
+#[test]
+fn reset_password_rejects_empty_fields() {
+    let server = TestServer::start();
+
+    let response = Client::new()
+        .post(server.url("/api/account/reset-password"))
+        .json(&json!({"token": "", "new_password_prehash": "newhash"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 422);
+}
+
+#[test]
+fn reset_password_propagates_an_invalid_or_expired_token_as_422() {
+    let auth = FakeAuthServer::start(&[("/reset-password", 400, "{}")]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/account/reset-password"))
+        .json(&json!({"token": "expired", "new_password_prehash": "newhash"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 422);
+}
+
+#[test]
+fn reset_password_revokes_the_callers_session_when_one_is_present() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, RESET_PASSWORD_OK]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/reset-password"))
+        .header("Cookie", &cookie)
+        .json(&json!({"token": "sometoken", "new_password_prehash": "newhash"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    // Same-request bonus: a session cookie carried into the reset call gets
+    // revoked too, even though xindeler-auth's reset-password doesn't
+    // surface the uuid needed to revoke every session for the account.
+    let me = client
+        .get(server.url("/api/session/me"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(me.status(), 401);
+}
+
 #[test]
 fn every_response_carries_privacy_and_cors_headers() {
     let server = TestServer::start();

@@ -53,7 +53,7 @@ dedup, honeypot, CORS/privacy headers, rate limiting real, shutdown graceful ant
 |---|---|---|
 | C-01 | Tabla `sessions` + `POST /api/session/login`, `GET /me`, `POST /logout` | `done` — `/login/2fa` queda afuera hasta que Fase L de `xindeler-auth` (2FA) exista; `login()` ya deja el comentario de dónde entra ese branch. Cookie `HttpOnly`+`Secure`+`SameSite=Lax`, TTL 7 días absoluto |
 | C-02 | Proxy autenticado `/api/account/*` hacia `xindeler-auth` | `done` — `authclient.rs` suma `check_username`/`change_username`/`change_password`/`delete_account` (los cuatro son endpoints públicos sin service-token del lado de `xindeler-auth`). `account.rs` nuevo: los tres mutantes exigen sesión, usan el `username` de la sesión (nunca el del cliente), y **revocan todas las sesiones de la cuenta** en el mismo request que `xindeler-auth` confirma el cambio — si lo rechaza, la sesión no se toca |
-| C-03 | Reroute `ForgotPasswordPage`/`ResetPasswordPage` de `xindeler-web-landing` a través de acá | `todo` |
+| C-03 | Reroute `ForgotPasswordPage`/`ResetPasswordPage` de `xindeler-web-landing` a través de acá | `parcial` — backend `done`: `authclient.rs` suma `forgot_password`/`reset_password` (endpoints públicos sin service-token, igual que los cuatro de C-02); `account.rs` suma `POST /api/account/forgot-password` (sin sesión, siempre `200 {ok:true}`, anti-enumeración) y `POST /api/account/reset-password` (sin sesión; revoca la sesión del llamador si trae una, pero no puede revocar *todas* las sesiones de la cuenta — `xindeler-auth`'s `reset_password` no devuelve el `uuid` que resuelve internamente, ver `.backlog/SPEC.md`). **Falta**: actualizar `ForgotPasswordPage.jsx`/`ResetPasswordPage.jsx` en `xindeler-web-landing` para llamar acá en vez de `auth.xindeler.com` directo |
 | C-04 | Coordinar `AUTH_SERVICE_TOKEN` con `xindeler-auth` | `done` — se reusa el mismo secreto del game server (decisión confirmada, sin objeción). Deploy key de solo lectura (`AUTH_REPO_SSH_KEY`) agregado a `xindeler-auth` para que el CI de este repo (público) pueda fetchear `xindeler-auth-common` (privado) — mismo patrón que `xindeler-new-horizon`/`xindeler-zuul` |
 
 **Verificación de C-01:** 2 tests de integración contra un `xindeler-auth` falso (servidor HTTP
@@ -65,6 +65,12 @@ los tres endpoints mutantes rechazan sin sesión (401); cada uno revoca la sesi�
 cambio (`/me` con la cookie vieja pasa a 401); un `change_password` rechazado por `xindeler-auth`
 (contraseña actual incorrecta) **no** revoca la sesión. Total del repo: 50 tests (32 unitarios +
 18 de integración).
+
+**Verificación de C-03 (backend):** 6 tests de integración nuevos con `FakeAuthServer` — `forgot-password`
+responde `200 {ok:true}` sin sesión y valida email no vacío; `reset-password` responde `200 {ok:true}`
+sin sesión, valida `token`/`new_password_prehash` no vacíos, propaga un rechazo de `xindeler-auth`
+(token inválido/expirado) como `422`, y revoca la sesión del llamador cuando el request trae una
+cookie de sesión válida. Total del repo: 56 tests (32 unitarios + 24 de integración).
 
 ## Fase D — Frontend consume la sesión (planeada)
 
