@@ -91,9 +91,17 @@ pub fn revoke_all_sessions(uuid: &str) -> Result<(), ApiError> {
 
 fn map_sign_in_error(err: AuthClientError) -> ApiError {
     match err {
-        AuthClientError::Rejected(401) | AuthClientError::Rejected(403) => {
-            ApiError::InvalidCredentials
-        }
+        // xindeler-auth answers InvalidLogin (bad username/password) and
+        // InvalidToken (bad/expired/already-consumed AuthToken, the error
+        // verify() would see) with 400, not 401 — confirmed against the
+        // real, deployed service during the B-05 smoke test, not assumed
+        // from the wire-type names. 403 stays here too, as the fallback for
+        // an EMAIL_VERIFICATION_REQUIRED-shaped 403 whose body didn't parse
+        // (login() intercepts the well-formed case before this function
+        // ever runs — see AuthClientError::EmailVerificationRequired).
+        AuthClientError::Rejected(400)
+        | AuthClientError::Rejected(401)
+        | AuthClientError::Rejected(403) => ApiError::InvalidCredentials,
         AuthClientError::Rejected(429) => ApiError::RateLimit,
         AuthClientError::Rejected(status) => {
             log::warn!("xindeler-auth answered with unexpected status {status}");
