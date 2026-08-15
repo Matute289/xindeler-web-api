@@ -54,10 +54,21 @@
 - 44 tests en verde (32 unitarios + 12 de integración, incluidos 2 nuevos contra un
   `xindeler-auth` falso hecho a mano)
 
+✅ **Fase 2 — Proxy de cuenta (C-02)** (esta pasada)
+- `authclient.rs` suma `check_username`/`change_username`/`change_password`/`delete_account` —
+  los cuatro son endpoints públicos de `xindeler-auth` (sin service-token, mismo tier
+  rate-limited-por-IP que `/generate_token`)
+- `account.rs` nuevo: `GET /api/account/check-username` (sin sesión, igual que hoy),
+  `POST /api/account/{change-username,change-password,delete}` (requieren sesión, usan el
+  `username` de la sesión — nunca uno que mande el cliente)
+- Toda mutación exitosa **revoca todas las sesiones de la cuenta** en el mismo request
+  (hallazgo 8 de la tarea 007) — nunca solo la sesión actual, nunca en background. Si
+  `xindeler-auth` rechaza el cambio, la sesión sigue viva
+- `session.rs` refactorizado: `resolve_session`/`revoke_all_sessions`/`clear_cookie` ahora
+  `pub(crate)`, reusados por `account.rs` en vez de duplicar la lógica de leer/hashear la cookie
+- 50 tests en verde (32 unitarios + 18 de integración, 8 nuevos de C-02)
+
 **Pendiente de Fase 2 — no se hizo esta pasada:**
-- C-02: proxy `/api/account/*` (`change_username`, `change_password`, `delete_account`,
-  `check_username`) — `authclient.rs` ya tiene la base, falta agregar estos métodos y los
-  handlers
 - C-03: reroute de `ForgotPasswordPage`/`ResetPasswordPage` de `xindeler-web-landing`
 - `/api/session/login/2fa` — bloqueado hasta que Fase L (2FA) de `xindeler-auth` exista
 
@@ -68,8 +79,11 @@ resultado del login. Base concreta para 005 (pantalla de cuenta) y 006 (personaj
 
 ## Orden de prioridad actual
 
-1. Fase 1 B-05 (corte de producción) — bloqueado a propósito hasta confirmación explícita de
-   Matías, toca datos reales de usuarios.
-2. Fase 2 C-02/C-03 (proxy de cuenta + reroute) — completa lo que hace falta para que 005/006 de
-   `xindeler-web-landing` tengan de verdad todo lo que necesitan.
-3. Fase 3 (frontend) — cierra el círculo.
+Decidido por Matías (2026-08-15): terminar todo el backlog de código primero, deploy al final —
+así el corte de producción sale con todo andando de una, no en pedazos.
+
+1. Fase 2 C-03 (reroute forgot/reset-password) — completa lo que falta de la sesión web.
+2. Fase 3 (frontend consume la sesión) — cierra el círculo del backlog 007.
+3. Fase 1 B-05 (corte de producción) — **última**, a propósito. Bloqueada hasta confirmación
+   explícita de Matías, toca datos reales de usuarios; se hace una sola vez con todo el backlog
+   ya resuelto en vez de deployar en fases.

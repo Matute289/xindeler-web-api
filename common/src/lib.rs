@@ -56,3 +56,29 @@ pub struct LoginPayload {
 pub struct MeResponse {
     pub username: String,
 }
+
+#[derive(Debug, Serialize)]
+pub struct AvailabilityResponse {
+    pub available: bool,
+}
+
+/// Requires an active session (the current username is read from it, never
+/// trusted from the client). `password_prehash` is the account's *current*
+/// password — xindeler-auth re-validates it on every mutating call, session
+/// or not.
+#[derive(Debug, Deserialize)]
+pub struct ChangeUsernameRequest {
+    pub new_username: String,
+    pub password_prehash: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password_prehash: String,
+    pub new_password_prehash: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteAccountRequest {
+    pub password_prehash: String,
+}

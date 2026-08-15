@@ -74,7 +74,17 @@ WEB_API_BIND_ADDR=127.0.0.1:8020 cargo run -p xindeler-web-api-server
 | `POST` | `/api/session/login` | ✅ Fase 2 |
 | `GET` | `/api/session/me` | ✅ Fase 2 |
 | `POST` | `/api/session/logout` | ✅ Fase 2 |
-| `POST` | `/api/account/*` (proxy autenticado a `xindeler-auth`) | ⏳ Fase 2 (pendiente: change-username/change-password/delete + reroute forgot/reset-password) |
+| `GET` | `/api/account/check-username` | ✅ Fase 2 |
+| `POST` | `/api/account/change-username` | ✅ Fase 2 |
+| `POST` | `/api/account/change-password` | ✅ Fase 2 |
+| `POST` | `/api/account/delete` | ✅ Fase 2 |
+| — | Reroute de `forgot-password`/`reset-password` del frontend | ⏳ Fase 2 (C-03) |
+
+Los cuatro endpoints de `/api/account/*` (salvo `check-username`) exigen sesión activa (cookie),
+usan el `username` de la sesión — nunca uno provisto por el cliente — y **revocan todas las
+sesiones de la cuenta** en el mismo request en que `xindeler-auth` confirma el cambio, forzando
+un relogin. Si `xindeler-auth` rechaza el cambio (contraseña actual incorrecta, etc.), la sesión
+sigue viva sin tocar.
 
 ## Subcomandos CLI
 

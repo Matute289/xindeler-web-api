@@ -52,14 +52,19 @@ dedup, honeypot, CORS/privacy headers, rate limiting real, shutdown graceful ant
 | ID | Tarea | Estado |
 |---|---|---|
 | C-01 | Tabla `sessions` + `POST /api/session/login`, `GET /me`, `POST /logout` | `done` — `/login/2fa` queda afuera hasta que Fase L de `xindeler-auth` (2FA) exista; `login()` ya deja el comentario de dónde entra ese branch. Cookie `HttpOnly`+`Secure`+`SameSite=Lax`, TTL 7 días absoluto |
-| C-02 | Proxy autenticado `/api/account/*` hacia `xindeler-auth` | `todo` — **decisión tomada**: HTTP propio vía `authclient.rs` (ya existe, `sign_in`/`verify`), nunca `xindeler-authc` (hashea internamente). Falta agregar `change_username`/`change_password`/`delete_account`/`check_username` al cliente y los handlers proxy |
+| C-02 | Proxy autenticado `/api/account/*` hacia `xindeler-auth` | `done` — `authclient.rs` suma `check_username`/`change_username`/`change_password`/`delete_account` (los cuatro son endpoints públicos sin service-token del lado de `xindeler-auth`). `account.rs` nuevo: los tres mutantes exigen sesión, usan el `username` de la sesión (nunca el del cliente), y **revocan todas las sesiones de la cuenta** en el mismo request que `xindeler-auth` confirma el cambio — si lo rechaza, la sesión no se toca |
 | C-03 | Reroute `ForgotPasswordPage`/`ResetPasswordPage` de `xindeler-web-landing` a través de acá | `todo` |
 | C-04 | Coordinar `AUTH_SERVICE_TOKEN` con `xindeler-auth` | `done` — se reusa el mismo secreto del game server (decisión confirmada, sin objeción). Deploy key de solo lectura (`AUTH_REPO_SSH_KEY`) agregado a `xindeler-auth` para que el CI de este repo (público) pueda fetchear `xindeler-auth-common` (privado) — mismo patrón que `xindeler-new-horizon`/`xindeler-zuul` |
 
-**Verificación de C-01:** 2 tests de integración nuevos (12 en total, los 10 de Fase B + estos)
-contra un `xindeler-auth` falso (servidor HTTP mínimo hecho a mano, sin dependencia nueva) —
-cubren login exitoso con cookie→`/me`→logout→`/me` 401, y credenciales inválidas sin setear
-cookie. Total del repo: 44 tests (32 unitarios + 12 de integración).
+**Verificación de C-01:** 2 tests de integración contra un `xindeler-auth` falso (servidor HTTP
+mínimo hecho a mano, sin dependencia nueva) — cubren login exitoso con
+cookie→`/me`→logout→`/me` 401, y credenciales inválidas sin setear cookie.
+
+**Verificación de C-02:** 8 tests de integración nuevos — `check-username` proxea disponibilidad;
+los tres endpoints mutantes rechazan sin sesión (401); cada uno revoca la sesión que hizo el
+cambio (`/me` con la cookie vieja pasa a 401); un `change_password` rechazado por `xindeler-auth`
+(contraseña actual incorrecta) **no** revoca la sesión. Total del repo: 50 tests (32 unitarios +
+18 de integración).
 
 ## Fase D — Frontend consume la sesión (planeada)
 
