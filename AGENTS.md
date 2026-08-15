@@ -69,7 +69,8 @@ server/   → el binario
     digest.rs                 → subcomando CLI, digest mensual
     migrate_csv.rs             → subcomando CLI, migración one-shot CSV→SQLite
     authclient.rs              → cliente HTTP propio hacia xindeler-auth (NO xindeler-authc)
-    session.rs                 → login/logout/me
+    session.rs                 → login/logout/me + resolve_session/revoke_all_sessions (reusados por account.rs)
+    account.rs                  → proxy /api/account/* (check-username/change-username/change-password/delete)
 ```
 
 ## Esquema de base de datos
@@ -95,9 +96,12 @@ segundo es el mismo secreto que ya usa el game server contra `xindeler-auth`, `/
 ## Seguridad — notas críticas
 
 - Ninguna llamada mutable a `xindeler-auth` (`change_username`, `change_password`,
-  `delete_account`, `2fa/*`) se debe hacer nunca directo desde el frontend — pasan por proxy acá,
-  autenticadas por la cookie de sesión. **Pendiente de implementar** (no confundir con hecho): los
-  endpoints `/api/account/*` todavía no existen, solo `/api/session/{login,logout,me}`.
+  `delete_account`) se hace directo desde el frontend — pasan por proxy acá (`/api/account/*`),
+  autenticadas por la cookie de sesión, usando el `username` de la sesión (nunca uno provisto por
+  el cliente). `2fa/*` queda afuera hasta que Fase L de `xindeler-auth` exista.
+- Toda mutación exitosa de cuenta **revoca todas las sesiones de esa cuenta** en el mismo
+  request (hallazgo 8 de la tarea 007) — nunca solo la actual, nunca en un job aparte. Si
+  `xindeler-auth` rechaza el cambio, la sesión no se toca.
 - Cookie de sesión: `HttpOnly` + `Secure` + `SameSite=Lax`. Nunca en `localStorage` ni legible
   desde JS.
 - CORS: allowlist exacta de origins (`https://xindeler.com`, `https://www.xindeler.com`, más los

@@ -17,6 +17,16 @@ const SESSION_COOKIE: &str = "session";
 /// Decisión #3 of backlog 007, proposed and not objected to.
 const SESSION_TTL_SECS: i64 = 7 * 24 * 3600;
 
+/// The identity behind a live session cookie — `uuid` is the stable key
+/// (used to revoke every session for an account), `username` is a cached
+/// display value that goes stale the instant `change_username` succeeds,
+/// which is exactly why every mutating account endpoint revokes and forces
+/// a relogin instead of patching it in place.
+pub struct SessionIdentity {
+    pub uuid: String,
+    pub username: String,
+}
+
 fn hash_token(raw: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(raw.as_bytes());
@@ -27,7 +37,8 @@ fn generate_session_token() -> String {
     hex::encode(rand::random::<[u8; 32]>())
 }
 
-/// `max_age_secs` of `0` clears the cookie (logout).
+/// `max_age_secs` of `0` clears the cookie (logout, or any mutating account
+/// action that revokes the session).
 fn set_cookie(response: Response, raw_token: &str, max_age_secs: i64) -> Response {
     response.with_unique_header(
         "Set-Cookie",
@@ -35,6 +46,47 @@ fn set_cookie(response: Response, raw_token: &str, max_age_secs: i64) -> Respons
             "{SESSION_COOKIE}={raw_token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={max_age_secs}"
         ),
     )
+}
+
+pub fn clear_cookie(response: Response) -> Response {
+    set_cookie(response, "", 0)
+}
+
+/// Resolves the session cookie into the account it belongs to. Every
+/// endpoint that requires "logged in" starts here.
+pub fn resolve_session(request: &Request) -> Result<SessionIdentity, ApiError> {
+    let raw = request
+        .cookie(SESSION_COOKIE)
+        .ok_or(ApiError::Unauthorized)?;
+    let session_id = hash_token(raw);
+    let now = Utc::now().timestamp();
+
+    db()?
+        .query_row(
+            "SELECT uuid, username FROM sessions \
+             WHERE session_id = ?1 AND revoked_at IS NULL AND expires_at > ?2",
+            params![session_id, now],
+            |row| {
+                Ok(SessionIdentity {
+                    uuid: row.get(0)?,
+                    username: row.get(1)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or(ApiError::Unauthorized)
+}
+
+/// Revokes every live session for an account — used by `change_username`,
+/// `change_password` and `delete_account` in the same request that confirms
+/// the change (hallazgo 8 of backlog 007), never a background job.
+pub fn revoke_all_sessions(uuid: &str) -> Result<(), ApiError> {
+    let now = Utc::now().timestamp();
+    db()?.execute(
+        "UPDATE sessions SET revoked_at = ?1 WHERE uuid = ?2 AND revoked_at IS NULL",
+        params![now, uuid],
+    )?;
+    Ok(())
 }
 
 fn map_sign_in_error(err: AuthClientError) -> ApiError {
@@ -107,25 +159,10 @@ pub fn login(body: &[u8], remote_ip: IpAddr, state: &AppState) -> Result<Respons
 }
 
 pub fn me(request: &Request) -> Result<Response, ApiError> {
-    let raw = request
-        .cookie(SESSION_COOKIE)
-        .ok_or(ApiError::Unauthorized)?;
-    let session_id = hash_token(raw);
-    let now = Utc::now().timestamp();
-
-    let username: Option<String> = db()?
-        .query_row(
-            "SELECT username FROM sessions \
-             WHERE session_id = ?1 AND revoked_at IS NULL AND expires_at > ?2",
-            params![session_id, now],
-            |row| row.get(0),
-        )
-        .optional()?;
-
-    match username {
-        Some(username) => Ok(Response::json(&MeResponse { username })),
-        None => Err(ApiError::Unauthorized),
-    }
+    let identity = resolve_session(request)?;
+    Ok(Response::json(&MeResponse {
+        username: identity.username,
+    }))
 }
 
 pub fn logout(request: &Request) -> Result<Response, ApiError> {
@@ -139,7 +176,7 @@ pub fn logout(request: &Request) -> Result<Response, ApiError> {
     // 200 regardless of whether a session existed — logging out twice, or
     // logging out with no cookie at all, is not an error from the caller's
     // point of view.
-    Ok(set_cookie(Response::json(&OkResponse { ok: true }), "", 0))
+    Ok(clear_cookie(Response::json(&OkResponse { ok: true })))
 }
 
 #[cfg(test)]

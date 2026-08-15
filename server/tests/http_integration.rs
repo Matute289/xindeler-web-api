@@ -256,8 +256,9 @@ struct FakeAuthServer {
 }
 
 impl FakeAuthServer {
-    /// `sign_in` and `verify` are each `(status, body)` for their endpoint.
-    fn start(sign_in: (u16, &'static str), verify: (u16, &'static str)) -> Self {
+    /// `routes` maps a path prefix to a canned `(status, body)` — first
+    /// matching prefix wins, unmatched requests get a bare 404.
+    fn start(routes: &'static [(&'static str, u16, &'static str)]) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
@@ -277,13 +278,11 @@ impl FakeAuthServer {
                             .next()
                             .and_then(|line| line.split_whitespace().nth(1))
                             .unwrap_or("");
-                        let (status, body) = if path.starts_with("/generate_token") {
-                            sign_in
-                        } else if path.starts_with("/verify") {
-                            verify
-                        } else {
-                            (404, "{}")
-                        };
+                        let (status, body) = routes
+                            .iter()
+                            .find(|(prefix, _, _)| path.starts_with(prefix))
+                            .map(|(_, status, body)| (*status, *body))
+                            .unwrap_or((404, "{}"));
                         let response = format!(
                             "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                             body.len()
@@ -316,16 +315,39 @@ impl Drop for FakeAuthServer {
 }
 
 const SERVICE_TOKEN: &str = "0123456789abcdef0123456789abcdef";
+const SIGN_IN_OK: (&str, u16, &str) = (
+    "/generate_token",
+    200,
+    r#"{"token":"0123456789abcdef0123456789abcdef"}"#,
+);
+const VERIFY_OK: (&str, u16, &str) = (
+    "/verify",
+    200,
+    r#"{"uuid":"11111111-1111-1111-1111-111111111111","username":"tester"}"#,
+);
+
+fn login_and_get_cookie(server: &TestServer, client: &Client) -> String {
+    let login = client
+        .post(server.url("/api/session/login"))
+        .json(&json!({"username": "tester", "password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(login.status(), 200);
+    login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned()
+}
 
 #[test]
 fn login_sets_a_session_cookie_that_me_and_logout_respect() {
-    let auth = FakeAuthServer::start(
-        (200, r#"{"token":"0123456789abcdef0123456789abcdef"}"#),
-        (
-            200,
-            r#"{"uuid":"11111111-1111-1111-1111-111111111111","username":"tester"}"#,
-        ),
-    );
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK]);
     let server = TestServer::start_with(&[
         ("AUTH_PUBLIC_URL", &auth.base_url),
         ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
@@ -384,7 +406,7 @@ fn login_sets_a_session_cookie_that_me_and_logout_respect() {
 
 #[test]
 fn invalid_credentials_return_401_without_setting_a_cookie() {
-    let auth = FakeAuthServer::start((401, "{}"), (200, "{}"));
+    let auth = FakeAuthServer::start(&[("/generate_token", 401, "{}"), ("/verify", 200, "{}")]);
     let server = TestServer::start_with(&[
         ("AUTH_PUBLIC_URL", &auth.base_url),
         ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
@@ -397,6 +419,157 @@ fn invalid_credentials_return_401_without_setting_a_cookie() {
         .unwrap();
     assert_eq!(response.status(), 401);
     assert_eq!(body_json(response)["code"], "INVALID_CREDENTIALS");
+}
+
+// --- C-02: /api/account/* proxy tests ---
+
+#[test]
+fn check_username_proxies_availability() {
+    let auth = FakeAuthServer::start(&[("/check-username", 200, r#"{"available":true}"#)]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .get(server.url("/api/account/check-username?username=nuevonombre"))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(body_json(response)["available"], true);
+}
+
+#[test]
+fn account_endpoints_require_a_session() {
+    let server = TestServer::start();
+
+    let change_username = Client::new()
+        .post(server.url("/api/account/change-username"))
+        .json(&json!({"new_username": "nuevo", "password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(change_username.status(), 401);
+
+    let change_password = Client::new()
+        .post(server.url("/api/account/change-password"))
+        .json(&json!({"current_password_prehash": "a", "new_password_prehash": "b"}))
+        .send()
+        .unwrap();
+    assert_eq!(change_password.status(), 401);
+
+    let delete = Client::new()
+        .post(server.url("/api/account/delete"))
+        .json(&json!({"password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(delete.status(), 401);
+}
+
+#[test]
+fn change_username_revokes_the_session_that_made_the_change() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ("/change_username", 200, "Ok")]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/change-username"))
+        .header("Cookie", &cookie)
+        .json(&json!({"new_username": "nuevonombre", "password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(body_json(response)["ok"], true);
+
+    // The session that made the change is revoked — same cookie, now 401.
+    let me = client
+        .get(server.url("/api/session/me"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(me.status(), 401);
+}
+
+#[test]
+fn change_password_revokes_the_session() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ("/change_password", 200, "Ok")]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/change-password"))
+        .header("Cookie", &cookie)
+        .json(&json!({"current_password_prehash": "old", "new_password_prehash": "new"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    let me = client
+        .get(server.url("/api/session/me"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(me.status(), 401);
+}
+
+#[test]
+fn delete_account_revokes_the_session() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ("/delete_account", 200, "Ok")]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/delete"))
+        .header("Cookie", &cookie)
+        .json(&json!({"password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    let me = client
+        .get(server.url("/api/session/me"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(me.status(), 401);
+}
+
+#[test]
+fn change_password_with_wrong_current_password_does_not_revoke_the_session() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ("/change_password", 401, "{}")]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/change-password"))
+        .header("Cookie", &cookie)
+        .json(&json!({"current_password_prehash": "wrong", "new_password_prehash": "new"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 401);
+
+    // xindeler-auth rejected the change — the session must still be alive.
+    let me = client
+        .get(server.url("/api/session/me"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(me.status(), 200);
 }
 
 #[test]

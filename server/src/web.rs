@@ -1,3 +1,4 @@
+use crate::account;
 use crate::config::NetworkConfig;
 use crate::error::{self, ApiError};
 use crate::http::{serve, BodyError, Request, Response};
@@ -93,8 +94,19 @@ fn dispatch(request: &Request, state: &AppState, network: &NetworkConfig) -> Res
             .unwrap_or_else(error::response),
         ("GET", "/api/session/me") => session::me(request).unwrap_or_else(error::response),
         ("POST", "/api/session/logout") => session::logout(request).unwrap_or_else(error::response),
-        // Fase 2 also adds: POST /api/account/* (proxy autenticado a
-        // xindeler-auth), reroute de forgot/reset-password.
+        ("GET", "/api/account/check-username") => {
+            account::check_username(request, state).unwrap_or_else(error::response)
+        }
+        ("POST", "/api/account/change-username") => take_request_data(request)
+            .and_then(|body| account::change_username(body, request, state))
+            .unwrap_or_else(error::response),
+        ("POST", "/api/account/change-password") => take_request_data(request)
+            .and_then(|body| account::change_password(body, request, state))
+            .unwrap_or_else(error::response),
+        ("POST", "/api/account/delete") => take_request_data(request)
+            .and_then(|body| account::delete_account(body, request, state))
+            .unwrap_or_else(error::response),
+        // Fase 2 also adds: reroute de forgot/reset-password (C-03).
         _ => Response::empty_404(),
     };
 

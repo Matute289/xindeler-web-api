@@ -8,9 +8,11 @@
 //! `xindeler-auth-common` supplies the wire types (zero risk of hand-typing
 //! the JSON shape wrong); the HTTP calls themselves are ours.
 
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use std::time::Duration;
 use xindeler_auth_common::{
-    AuthToken, SignInPayload, SignInResponse, ValidityCheckPayload, ValidityCheckResponse,
+    AuthToken, ChangePasswordPayload, ChangeUsernamePayload, DeleteAccountPayload, SignInPayload,
+    SignInResponse, UsernameAvailabilityResponse, ValidityCheckPayload, ValidityCheckResponse,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -97,5 +99,89 @@ impl AuthClient {
             return Err(AuthClientError::Rejected(response.status().as_u16()));
         }
         Ok(response.json()?)
+    }
+
+    // All four methods below are public, unauthenticated endpoints on
+    // xindeler-auth's side (no service token — same rate-limited-by-IP tier
+    // as `/generate_token`/`/register`). `password_prehash` fields must
+    // already be prehashed, same as `sign_in`.
+
+    pub fn check_username(&self, username: &str) -> Result<bool, AuthClientError> {
+        let encoded = utf8_percent_encode(username, NON_ALPHANUMERIC);
+        let response = self
+            .client
+            .get(format!(
+                "{}/check-username?username={encoded}",
+                self.base_url
+            ))
+            .send()?;
+        if !response.status().is_success() {
+            return Err(AuthClientError::Rejected(response.status().as_u16()));
+        }
+        Ok(response.json::<UsernameAvailabilityResponse>()?.available)
+    }
+
+    pub fn change_username(
+        &self,
+        old_username: &str,
+        password_prehash: &str,
+        new_username: &str,
+    ) -> Result<(), AuthClientError> {
+        let payload = ChangeUsernamePayload {
+            old_username: old_username.to_owned(),
+            password: password_prehash.to_owned(),
+            new_username: new_username.to_owned(),
+        };
+        let response = self
+            .client
+            .post(format!("{}/change_username", self.base_url))
+            .json(&payload)
+            .send()?;
+        if !response.status().is_success() {
+            return Err(AuthClientError::Rejected(response.status().as_u16()));
+        }
+        Ok(())
+    }
+
+    pub fn change_password(
+        &self,
+        username: &str,
+        current_password_prehash: &str,
+        new_password_prehash: &str,
+    ) -> Result<(), AuthClientError> {
+        let payload = ChangePasswordPayload {
+            username: username.to_owned(),
+            current_password: current_password_prehash.to_owned(),
+            new_password: new_password_prehash.to_owned(),
+        };
+        let response = self
+            .client
+            .post(format!("{}/change_password", self.base_url))
+            .json(&payload)
+            .send()?;
+        if !response.status().is_success() {
+            return Err(AuthClientError::Rejected(response.status().as_u16()));
+        }
+        Ok(())
+    }
+
+    pub fn delete_account(
+        &self,
+        username: &str,
+        password_prehash: &str,
+    ) -> Result<(), AuthClientError> {
+        let payload = DeleteAccountPayload {
+            username: username.to_owned(),
+            password: password_prehash.to_owned(),
+        };
+        let response = self
+            .client
+            .post(format!("{}/delete_account", self.base_url))
+            .json(&payload)
+            .send()?;
+        if !response.status().is_success() {
+            return Err(AuthClientError::Rejected(response.status().as_u16()));
+        }
+        Ok(())
     }
 }

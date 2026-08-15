@@ -92,7 +92,6 @@ impl Request {
         })
     }
 
-    #[allow(dead_code)]
     fn raw_query_string(&self) -> &str {
         match self.url.bytes().position(|byte| byte == b'?') {
             Some(pos) => self.url.split_at(pos + 1).1,
@@ -106,7 +105,6 @@ impl Request {
     /// and because the value is taken with `split('=').nth(1)` an embedded
     /// `=` truncates it (`?u=a=b` yields `a`). Covered by
     /// `query_parameters_are_parsed_consistently` below.
-    #[allow(dead_code)]
     pub fn get_param(&self, param_name: &str) -> Option<String> {
         let name_pattern = &format!("{param_name}=");
         let param_pairs = self.raw_query_string().split('&');

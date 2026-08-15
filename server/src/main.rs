@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod account;
 mod authclient;
 mod cache;
 mod config;
