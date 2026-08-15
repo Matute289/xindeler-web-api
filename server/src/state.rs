@@ -1,11 +1,26 @@
+use crate::cache::TtlCache;
 use crate::config::AppConfig;
+use crate::ratelimit::RateLimiter;
+use std::time::Duration;
 
-/// Empty in Fase 0. Fase 1 adds rate limiters (same pattern as
-/// `xindeler-auth`'s `AppState`); Fase 2 adds the session store.
-pub struct AppState {}
+const STATUS_TTL: Duration = Duration::from_secs(30);
+const COUNT_TTL: Duration = Duration::from_secs(60);
+
+pub struct AppState {
+    pub status_cache: TtlCache<(bool, String)>,
+    pub count_cache: TtlCache<u64>,
+    pub waitlist_requests: RateLimiter,
+    pub contribute_requests: RateLimiter,
+}
 
 impl AppState {
-    pub fn from_config(_config: &AppConfig) -> Self {
-        Self {}
+    pub fn from_config(config: &AppConfig) -> Self {
+        let window = Duration::from_secs(config.rate_limit_window_secs);
+        Self {
+            status_cache: TtlCache::new(STATUS_TTL),
+            count_cache: TtlCache::new(COUNT_TTL),
+            waitlist_requests: RateLimiter::with_limits(config.rate_limit_max, window),
+            contribute_requests: RateLimiter::with_limits(config.rate_limit_max, window),
+        }
     }
 }

@@ -19,36 +19,24 @@
 - Skills (`xindeler-web-api-dev`, `xindeler-web-api-architect`) y agentes reviewers
   (`xindeler-web-api-security-reviewer`, `xindeler-web-api-quality-reviewer`)
 
-## Próximos pasos
+✅ **Fase 1 — Paridad funcional (código)** (esta pasada)
+- Tablas `waitlist`/`contributors` (SQLite + WAL, `COLLATE NOCASE` para dedup case-insensitive),
+  migraciones refinery
+- `GET /api/status` (probe TCP cacheado 30s) y `GET /api/waitlist/count` (cacheado 60s,
+  invalidado al insertar)
+- `POST /api/waitlist` y `POST /api/contribute` — rate limit **antes** del dedup (bug #1
+  corregido), HTML de emails escapado + `portfolio` solo se linkea con esquema seguro (bug #3
+  corregido), `RateLimiter` con TTL real (bug #4 corregido)
+- Subcomando `digest` (port de `monthly-digest.py`, apunta a `xindeler.com`) y subcomando
+  `migrate-csv` (idempotente, probado con fixtures)
+- 38 tests en verde (28 unitarios + 10 de integración `TestServer` contra el binario real)
+- `WEB_API_TRUSTED_PROXIES` + resolución de IP real vía `X-Forwarded-For` (nuestro nginx no manda
+  `X-Real-IP` como `xindeler-auth` — hubo que adaptar el patrón, no copiarlo literal)
 
-### Fase 1 — Paridad funcional
-
-Portar `waitlist`/`contribute`/`status`/`count` a SQLite + Rust, corrigiendo los bugs relevados
-del Python actual (dedup antes de rate-limit, `count` roto en nginx, HTML sin escapar, rate
-limiter que no evictea). Portar `monthly-digest.py`. Migrar los 7 registros de los CSV. Deploy en
-puerto nuevo, smoke-test directo, corte de nginx, apagar `xindeler-waitlist.service`.
-
-Shape esperado de las tablas nuevas:
-
-```sql
-CREATE TABLE waitlist (
-    id INTEGER PRIMARY KEY,
-    created_at INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    platform TEXT NOT NULL,
-    source TEXT NOT NULL
-);
-
-CREATE TABLE contributors (
-    id INTEGER PRIMARY KEY,
-    created_at INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    skills TEXT NOT NULL,
-    portfolio TEXT NOT NULL DEFAULT ''
-);
-```
+**Pendiente de Fase 1 — requiere producción real, no se hizo esta pasada:**
+- Correr `migrate-csv` contra los CSV reales del VPS
+- Deploy en puerto nuevo, smoke-test directo, corte de `proxy_pass` en nginx, apagar
+  `xindeler-waitlist.service` — bloqueado a propósito hasta que Matías confirme explícitamente
 
 ### Fase 2 — Sesión web
 

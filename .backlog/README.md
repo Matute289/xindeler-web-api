@@ -32,15 +32,20 @@ backlog de `xindeler-web-landing`.
 | A-06 | `CLAUDE.md`/`AGENTS.md` + `.backlog/{README,SPEC,PLAN}.md` | `done` |
 | A-07 | Skills (`xindeler-web-api-dev`, `xindeler-web-api-architect`) y agentes reviewers dedicados | `done` |
 
-## Fase B — Paridad funcional (planeada)
+## Fase B — Paridad funcional (2026-08-14)
 
 | ID | Tarea | Estado |
 |---|---|---|
-| B-01 | Migrar `waitlist`/`contribute`/`status`/`count` a SQLite + Rust | `todo` |
-| B-02 | Corregir los bugs relevados del Python actual (dedup antes de rate-limit, `count` roto en nginx, HTML sin escapar en emails, rate limiter que no evictea claves, I/O bloqueante, sin locking de CSV) | `todo` |
-| B-03 | Portar `monthly-digest.py` (systemd timer mensual) | `todo` |
-| B-04 | Migrar los 7 registros reales de `waitlist.csv`/`contributors.csv` | `todo` |
-| B-05 | Deploy en puerto nuevo, smoke-test directo, corte de nginx, apagar `xindeler-waitlist.service` | `todo` |
+| B-01 | Migrar `waitlist`/`contribute`/`status`/`count` a SQLite + Rust | `done` — tablas `waitlist`/`contributors` con `COLLATE NOCASE` para dedup, `TtlCache` para status/count, `RateLimiter` con TTL real |
+| B-02 | Corregir los bugs relevados del Python actual | `done` — rate limit corre antes del dedup; HTML de emails escapado + `portfolio` solo se linkea con esquema `http(s)://`; `RateLimiter` evictea subjects inactivos; SQLite + WAL evita el problema de locking de los CSV; `/api/waitlist/count` ya no comparte location de nginx con el `limit_except POST` que lo bloqueaba (queda pendiente actualizar la config real de nginx en B-05) |
+| B-03 | Portar `monthly-digest.py` (systemd timer mensual) | `done` — subcomando `xindeler-web-api-server digest`, apunta a `xindeler.com` (no al dominio legacy), watermark se escribe siempre incluso si el envío falla |
+| B-04 | Migrar los 7 registros reales de `waitlist.csv`/`contributors.csv` | `parcial` — subcomando `migrate-csv` implementado e idempotente (probado con fixtures), **falta correrlo contra los datos reales del VPS** (parte de B-05, requiere acceso a producción) |
+| B-05 | Deploy en puerto nuevo, smoke-test directo, corte de nginx, apagar `xindeler-waitlist.service` | `todo` — bloqueado a propósito hasta confirmación explícita de Matías (toca producción real) |
+
+**Verificación de B-01/B-02/B-03:** 38 tests en verde (28 unitarios + 10 de integración con
+`TestServer`, mismo patrón que `xindeler-auth/server/tests/http_security.rs` — binario real,
+puerto libre, DB temporal). Cubren: contrato de status codes (201/422/429), anti-enumeración en
+dedup, honeypot, CORS/privacy headers, rate limiting real, shutdown graceful ante SIGTERM.
 
 ## Fase C — Sesión web autenticada (planeada)
 

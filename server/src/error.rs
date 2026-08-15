@@ -1,19 +1,55 @@
 use crate::http::Response;
 use serde::Serialize;
 
-/// Internal error vocabulary. Fase 1/2 extend this (validation, rate limit,
-/// upstream-auth failures) — kept deliberately small in Fase 0, where the
-/// only handler is `/ping`.
+/// Internal error vocabulary.
+///
+/// The inner values (`Db`, `Migration`, `InvalidRequest`, `Io`) are read only
+/// through the `{error:?}` Debug format in `error::response()`'s log line —
+/// dead-code analysis doesn't count that as a "real" read, hence the allow.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum ApiError {
     InternalServerError,
+    Db(rusqlite::Error),
+    Migration(refinery::Error),
+    /// A request field failed validation. Maps to 422, matching the Pydantic
+    /// behavior of the Python service this replaces — the frontend already
+    /// expects 422 for bad input, not 400.
+    InvalidRequest(String),
+    RateLimit,
+    RequestTooLarge,
+    Io(std::io::Error),
 }
 
 impl ApiError {
     pub fn status_code(&self) -> u16 {
         match self {
-            ApiError::InternalServerError => 500,
+            ApiError::InternalServerError
+            | ApiError::Db(_)
+            | ApiError::Migration(_)
+            | ApiError::Io(_) => 500,
+            ApiError::InvalidRequest(_) => 422,
+            ApiError::RateLimit => 429,
+            ApiError::RequestTooLarge => 413,
         }
+    }
+}
+
+impl From<rusqlite::Error> for ApiError {
+    fn from(error: rusqlite::Error) -> Self {
+        ApiError::Db(error)
+    }
+}
+
+impl From<refinery::Error> for ApiError {
+    fn from(error: refinery::Error) -> Self {
+        ApiError::Migration(error)
+    }
+}
+
+impl From<serde_json::Error> for ApiError {
+    fn from(error: serde_json::Error) -> Self {
+        ApiError::InvalidRequest(error.to_string())
     }
 }
 
@@ -29,7 +65,13 @@ pub struct PublicErrorBody {
 
 pub fn public_fields(error: &ApiError) -> (&'static str, &'static str) {
     match error {
-        ApiError::InternalServerError => ("INTERNAL_ERROR", "Internal server error."),
+        ApiError::InvalidRequest(_) => ("INVALID_REQUEST", "The request is invalid."),
+        ApiError::RateLimit => ("RATE_LIMITED", "Too many requests. Try again later."),
+        ApiError::RequestTooLarge => ("REQUEST_TOO_LARGE", "The request body is too large."),
+        ApiError::InternalServerError
+        | ApiError::Db(_)
+        | ApiError::Migration(_)
+        | ApiError::Io(_) => ("INTERNAL_ERROR", "Internal server error."),
     }
 }
 

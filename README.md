@@ -39,22 +39,38 @@ WEB_API_BIND_ADDR=127.0.0.1:8020 cargo run -p xindeler-web-api-server
 |---|---|---|
 | `WEB_API_BIND_ADDR` | `127.0.0.1:8020` | Dirección donde escucha el servidor |
 | `WEB_API_HTTP_WORKERS` | `16` | Threads del pool bloqueante (1–256) |
+| `WEB_API_DB_DIR` | `/opt/xindeler-web-api/data/web-api.db` | Ruta del archivo SQLite |
+| `WEB_API_GAME_SERVER_ADDR` | `127.0.0.1:14004` | Dirección del game server para `/api/status` |
+| `WEB_API_TRUSTED_PROXIES` | `127.0.0.0/8,::1/128` | CIDRs desde donde se confía en `X-Forwarded-For` |
+| `WEB_API_RATE_LIMIT_MAX` / `WEB_API_RATE_LIMIT_WINDOW_SECS` | `3` / `3600` | Límite de `/api/waitlist` y `/api/contribute` (por IP) |
+| `WEB_API_DIGEST_STATE_PATH` | `/opt/xindeler-web-api/data/digest-last-sent.txt` | Marca de agua del digest mensual |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` | — (opcional) | Sin configurar, el envío de mail no-opea en silencio |
+| `OWNER_EMAIL` | — (opcional) | Destinatario de notificaciones de contribuidores + digest mensual |
 | `RUST_LOG` | *(sin logs)* | Nivel de log (`env_logger`), ej. `info` |
 
-Fase 1 agrega variables de SMTP y base de datos; Fase 2 agrega `AUTH_SERVICE_TOKEN` para hablar
-con `xindeler-auth`. Se documentan acá a medida que existan.
+Fase 2 agrega `AUTH_SERVICE_TOKEN` para hablar con `xindeler-auth`.
 
 ## Endpoints
 
 | Método | Ruta | Estado |
 |---|---|---|
 | `GET` | `/ping` | ✅ Fase 0 |
-| `GET` | `/api/status` | ⏳ Fase 1 |
-| `GET` | `/api/waitlist/count` | ⏳ Fase 1 |
-| `POST` | `/api/waitlist` | ⏳ Fase 1 |
-| `POST` | `/api/contribute` | ⏳ Fase 1 |
+| `GET` | `/api/status` | ✅ Fase 1 |
+| `GET` | `/api/waitlist/count` | ✅ Fase 1 |
+| `POST` | `/api/waitlist` | ✅ Fase 1 |
+| `POST` | `/api/contribute` | ✅ Fase 1 |
 | `POST` | `/api/session/login`, `/logout`, `GET /me` | ⏳ Fase 2 |
 | `POST` | `/api/account/*` (proxy autenticado a `xindeler-auth`) | ⏳ Fase 2 |
+
+## Subcomandos CLI
+
+```sh
+# Digest mensual (systemd timer) — no-opea si falta SMTP/OWNER_EMAIL
+xindeler-web-api-server digest
+
+# Migración one-shot de los CSV del servicio Python — idempotente
+xindeler-web-api-server migrate-csv waitlist.csv contributors.csv
+```
 
 ## Docker
 
