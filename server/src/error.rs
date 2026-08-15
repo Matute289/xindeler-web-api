@@ -19,6 +19,16 @@ pub enum ApiError {
     RateLimit,
     RequestTooLarge,
     Io(std::io::Error),
+    /// Username/password_prehash rejected by xindeler-auth, or an
+    /// AuthToken it issued failed /verify. Same public code either way —
+    /// never distinguish "wrong password" from "verify failed" in the
+    /// response, that distinction is an internal implementation detail.
+    InvalidCredentials,
+    /// No session cookie, or it doesn't match a live row in `sessions`.
+    Unauthorized,
+    /// xindeler-auth didn't respond, or responded with something this
+    /// service doesn't know how to interpret (not a client input problem).
+    UpstreamAuthError,
 }
 
 impl ApiError {
@@ -31,6 +41,8 @@ impl ApiError {
             ApiError::InvalidRequest(_) => 422,
             ApiError::RateLimit => 429,
             ApiError::RequestTooLarge => 413,
+            ApiError::InvalidCredentials | ApiError::Unauthorized => 401,
+            ApiError::UpstreamAuthError => 502,
         }
     }
 }
@@ -68,6 +80,12 @@ pub fn public_fields(error: &ApiError) -> (&'static str, &'static str) {
         ApiError::InvalidRequest(_) => ("INVALID_REQUEST", "The request is invalid."),
         ApiError::RateLimit => ("RATE_LIMITED", "Too many requests. Try again later."),
         ApiError::RequestTooLarge => ("REQUEST_TOO_LARGE", "The request body is too large."),
+        ApiError::InvalidCredentials => (
+            "INVALID_CREDENTIALS",
+            "The username or password is incorrect.",
+        ),
+        ApiError::Unauthorized => ("UNAUTHORIZED", "Not logged in."),
+        ApiError::UpstreamAuthError => ("UPSTREAM_ERROR", "Authentication service unavailable."),
         ApiError::InternalServerError
         | ApiError::Db(_)
         | ApiError::Migration(_)

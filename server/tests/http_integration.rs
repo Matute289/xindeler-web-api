@@ -7,9 +7,13 @@
 
 use reqwest::blocking::{Client, Response};
 use serde_json::{json, Value};
+use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 struct TestServer {
@@ -239,6 +243,160 @@ fn contribute_endpoint_accepts_a_valid_submission() {
         .unwrap();
     assert_eq!(response.status(), 201);
     assert_eq!(body_json(response)["ok"], true);
+}
+
+// --- Session tests: a hand-rolled fake xindeler-auth, just enough to serve
+// fixed responses for /generate_token and /verify. No new test dependency
+// (a real HTTP mock crate would be overkill for two canned JSON bodies).
+
+struct FakeAuthServer {
+    base_url: String,
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl FakeAuthServer {
+    /// `sign_in` and `verify` are each `(status, body)` for their endpoint.
+    fn start(sign_in: (u16, &'static str), verify: (u16, &'static str)) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop);
+
+        let handle = thread::spawn(move || {
+            while !stop_clone.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        let mut buf = [0_u8; 4096];
+                        let n = stream.read(&mut buf).unwrap_or(0);
+                        let request = String::from_utf8_lossy(&buf[..n]);
+                        let path = request
+                            .lines()
+                            .next()
+                            .and_then(|line| line.split_whitespace().nth(1))
+                            .unwrap_or("");
+                        let (status, body) = if path.starts_with("/generate_token") {
+                            sign_in
+                        } else if path.starts_with("/verify") {
+                            verify
+                        } else {
+                            (404, "{}")
+                        };
+                        let response = format!(
+                            "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                    }
+                    Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Self {
+            base_url: format!("http://{addr}"),
+            stop,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for FakeAuthServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+const SERVICE_TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+#[test]
+fn login_sets_a_session_cookie_that_me_and_logout_respect() {
+    let auth = FakeAuthServer::start(
+        (200, r#"{"token":"0123456789abcdef0123456789abcdef"}"#),
+        (
+            200,
+            r#"{"uuid":"11111111-1111-1111-1111-111111111111","username":"tester"}"#,
+        ),
+    );
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+
+    // No cookie yet — /me is unauthorized.
+    let before = client.get(server.url("/api/session/me")).send().unwrap();
+    assert_eq!(before.status(), 401);
+
+    let login = client
+        .post(server.url("/api/session/login"))
+        .json(&json!({"username": "tester", "password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(login.status(), 200);
+    let set_cookie = login
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(set_cookie.starts_with("session="));
+    assert!(set_cookie.contains("HttpOnly"));
+    assert!(set_cookie.contains("Secure"));
+    assert!(set_cookie.contains("SameSite=Lax"));
+    assert_eq!(body_json(login)["username"], "tester");
+
+    // reqwest's Client doesn't auto-store cookies unless built with a jar —
+    // forward the Set-Cookie value by hand, same as a browser would.
+    let cookie_value = set_cookie.split(';').next().unwrap().to_owned();
+
+    let me = client
+        .get(server.url("/api/session/me"))
+        .header("Cookie", &cookie_value)
+        .send()
+        .unwrap();
+    assert_eq!(me.status(), 200);
+    assert_eq!(body_json(me)["username"], "tester");
+
+    let logout = client
+        .post(server.url("/api/session/logout"))
+        .header("Cookie", &cookie_value)
+        .send()
+        .unwrap();
+    assert_eq!(logout.status(), 200);
+
+    let after_logout = client
+        .get(server.url("/api/session/me"))
+        .header("Cookie", &cookie_value)
+        .send()
+        .unwrap();
+    assert_eq!(after_logout.status(), 401);
+}
+
+#[test]
+fn invalid_credentials_return_401_without_setting_a_cookie() {
+    let auth = FakeAuthServer::start((401, "{}"), (200, "{}"));
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/session/login"))
+        .json(&json!({"username": "tester", "password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 401);
+    assert_eq!(body_json(response)["code"], "INVALID_CREDENTIALS");
 }
 
 #[test]

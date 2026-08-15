@@ -25,8 +25,9 @@ repo propio, absorbiendo tanto los endpoints existentes como la sesión nueva.
 
 `xindeler-auth` (el otro backend del ecosistema) y `xindeler-new-horizon` (el motor del juego)
 son ambos Rust. `~/Workspace/RustroverProjects/` tiene 7 proyectos Xindeler, todos Rust;
-`GolandProjects/` no tiene ninguno. Rust además permite consumir `xindeler-authc` directamente
-como dependencia de Cargo para hablar con `xindeler-auth`, sin reimplementar HTTP a mano.
+`GolandProjects/` no tiene ninguno. Rust además permite consumir `xindeler-auth-common`
+directamente como dependencia de Cargo para los tipos de wire hacia `xindeler-auth`, sin
+hand-typearlos (ver más abajo por qué no `xindeler-authc`).
 
 ### Por qué clonar la arquitectura de `xindeler-auth` casi 1:1
 
@@ -69,11 +70,24 @@ hoy, URLs hardcodeadas — Fase 3 introduce env vars + proxy de Vite).
 
 ### `xindeler-auth` (identidad)
 
-Fase 2 consume `xindeler-authc` (crate) para `register`/`sign_in`/`validate_full`/
-`username_to_uuid`/`uuid_to_username`, autenticado con `AUTH_SERVICE_TOKEN` (mismo secreto que ya
-usa el game server — ver "Coordinación cross-repo" en el plan de la Fase 0). Los endpoints que
-`authc` no cubre (`check-username`, `forgot-password`, `reset-password`, `account-email`,
-`resend-verification`) se llaman por HTTP directo, mismo patrón server-to-server.
+**Decisión final (C-01, contradice lo que este documento decía antes de implementar):** Fase 2
+**no** usa `xindeler-authc`. Ese crate expone `sign_in()`/`register()`, pero ambos calculan
+`net_prehash()` internamente sobre lo que reciben — este servicio siempre recibe el
+`password_prehash` **ya calculado** por el frontend, así que usar `authc` hashearía dos veces y
+rompería todos los logins. Se detectó leyendo el código fuente de `authc` (no solo su doc), antes
+de escribir una sola línea de `authclient.rs`.
+
+En cambio, `server/src/authclient.rs` es un cliente HTTP propio y delgado que depende de
+`xindeler-auth-common` (git, mismo repo privado) **solo para los tipos de wire**
+(`SignInPayload`, `SignInResponse`, `ValidityCheckPayload`, `ValidityCheckResponse`, etc.) —
+cero riesgo de hand-typear el JSON mal, cero riesgo de doble hash. Cubre `sign_in`
+(`/generate_token`) y `verify` (`/verify`, requiere `AUTH_SERVICE_TOKEN` — mismo secreto que ya
+usa el game server, ver "Coordinación cross-repo" en el plan de la Fase 0). C-02 le agrega
+`change_username`/`change_password`/`delete_account`/`check_username` con el mismo criterio.
+
+La dependencia de `xindeler-auth-common` sigue siendo un repo privado consumido desde un repo
+público — resuelto con el mismo patrón que `xindeler-new-horizon`/`xindeler-zuul`: deploy key de
+solo lectura (`AUTH_REPO_SSH_KEY`) + `.cargo/config.toml` con `git-fetch-with-cli`.
 
 ## Gaps conocidos vs. producción robusta
 

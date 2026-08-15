@@ -1,0 +1,9 @@
+# The xindeler-auth-common git dependency lives in a private repo reached
+# over SSH. Cargo's built-in libgit2 client fails ssh-agent auth in some
+# environments ("attempted ssh-agent authentication, but no usernames
+# succeeded") even though the system `git` CLI authenticates fine — same
+# workaround xindeler-new-horizon and xindeler-zuul use for the same
+# dependency. Setting it here means every `cargo build`/`clippy`/`test`
+# picks it up automatically, on any machine (including CI).
+[net]
+git-fetch-with-cli = true
