@@ -25,12 +25,12 @@ backlog de `xindeler-web-landing`.
 | ID | Tarea | Estado |
 |---|---|---|
 | A-01 | Crear repo `Matute289/xindeler-web-api` público | `done` |
-| A-02 | Hardening del repo GitHub (ruleset, secret scanning, dependabot, vulnerability alerts, `SECURITY.md`, `CODEOWNERS`) | `in-progress` |
+| A-02 | Hardening del repo GitHub (ruleset, secret scanning, vulnerability alerts, `SECURITY.md`, `CODEOWNERS`) | `done` — Dependabot se probó y se sacó a pedido de Matías (2026-08-14): abría PRs y mandaba mails que no aportaban valor acá. Sin Dependabot, `cargo audit`/`cargo deny` en CI siguen cubriendo vulnerabilidades conocidas en cada PR y semanalmente. |
 | A-03 | Scaffold Cargo workspace (`common`/`server`), seam HTTP framework-agnóstico copiado de `xindeler-auth` | `done` — `GET /ping` funcionando, build/test/clippy/fmt en verde |
 | A-04 | CI (`check.yml`) + `scripts/check-{unsafe-policy,docs,docker-context}.sh` invocados desde CI | `done` |
 | A-05 | `Dockerfile` + `docker-compose.yml` hardened (paridad dev/testing, no reemplaza systemd en prod) | `done` |
-| A-06 | `CLAUDE.md`/`AGENTS.md` + `.backlog/{README,SPEC,PLAN}.md` | `in-progress` |
-| A-07 | Skills (`xindeler-web-api-dev`, `xindeler-web-api-architect`) y agentes reviewers dedicados | `todo` |
+| A-06 | `CLAUDE.md`/`AGENTS.md` + `.backlog/{README,SPEC,PLAN}.md` | `done` |
+| A-07 | Skills (`xindeler-web-api-dev`, `xindeler-web-api-architect`) y agentes reviewers dedicados | `done` |
 
 ## Fase B — Paridad funcional (planeada)
 

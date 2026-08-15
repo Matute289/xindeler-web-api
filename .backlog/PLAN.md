@@ -13,7 +13,9 @@
 - `Dockerfile` + `docker-compose.yml` hardened (usuario no-root, `read_only`, `cap_drop: ALL`) —
   paridad de dev/testing; producción sigue siendo systemd
 - `CLAUDE.md` == `AGENTS.md`, `.backlog/{README,SPEC,PLAN}.md`
-- Hardening del repo GitHub (ruleset, secret scanning, dependabot, `SECURITY.md`)
+- Hardening del repo GitHub (ruleset, secret scanning, vulnerability alerts, `SECURITY.md`) —
+  Dependabot se probó y se sacó a pedido de Matías (abría PRs y mandaba mails sin aportar valor
+  acá); `cargo audit`/`cargo deny` en CI siguen cubriendo vulnerabilidades conocidas
 - Skills (`xindeler-web-api-dev`, `xindeler-web-api-architect`) y agentes reviewers
   (`xindeler-web-api-security-reviewer`, `xindeler-web-api-quality-reviewer`)
 
