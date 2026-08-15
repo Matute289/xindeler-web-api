@@ -1,6 +1,16 @@
 # Plan — xindeler-web-api
 
-## Estado actualizado al 2026-08-14
+## Estado actualizado al 2026-08-15 — backlog 007 completo, en producción
+
+Las cuatro fases están cerradas y el corte de producción real ya se ejecutó: `xindeler-web-api`
+sirve `xindeler.com/api/*` desde el VPS (puerto 8020, systemd), `xindeler-waitlist.service`
+(Python) está parado y deshabilitado. Detalle completo del corte en `.backlog/README.md`, sección
+B-05. Lo único que queda abierto es lo que ya estaba fuera de alcance a propósito:
+`/api/session/login/2fa` (bloqueado hasta que Fase L de `xindeler-auth` exista) y la UI de "sesión
+activa" en la landing (navbar/logout — pertenece a la pantalla de cuenta, 005, todavía sin
+diseñar).
+
+## Estado al 2026-08-14 (histórico, previo al corte de producción)
 
 ✅ **Fase 0 — Repo y fundaciones** (esta pasada)
 - Repo `Matute289/xindeler-web-api` creado, público
@@ -33,10 +43,18 @@
 - `WEB_API_TRUSTED_PROXIES` + resolución de IP real vía `X-Forwarded-For` (nuestro nginx no manda
   `X-Real-IP` como `xindeler-auth` — hubo que adaptar el patrón, no copiarlo literal)
 
-**Pendiente de Fase 1 — requiere producción real, no se hizo esta pasada:**
-- Correr `migrate-csv` contra los CSV reales del VPS
-- Deploy en puerto nuevo, smoke-test directo, corte de `proxy_pass` en nginx, apagar
-  `xindeler-waitlist.service` — bloqueado a propósito hasta que Matías confirme explícitamente
+✅ **Fase 1 — B-04/B-05, corte de producción real (2026-08-15)**
+- `migrate-csv` corrido contra los datos reales del VPS: 5 filas de waitlist + 1 de contributors
+  migradas (6 filas totales en el CSV, 1 duplicado detectado); idempotencia confirmada re-corriendo
+- Deploy en `/opt/xindeler-web-api/` (puerto 8020), systemd hardened igual que
+  `xindeler-auth.service`, smoke-test directo contra el puerto (sin nginx) antes de tocar nada real
+- Bug real encontrado en el smoke-test, no en tests: `xindeler-auth` responde `400` (no `401`) a
+  login inválido — `map_sign_in_error` lo colapsaba a `502`. Corregido y mergeado (`#9`) antes de
+  seguir — ver `SPEC.md`
+- Corte de nginx (`/api/*` de `127.0.0.1:8010` a `127.0.0.1:8020`, con backup + `nginx -t` +
+  rollback automático) + fix del bug de `/api/waitlist/count` bloqueado, en el mismo cambio
+- Verificación end-to-end contra `xindeler.com` real, `xindeler-waitlist.service` parado y
+  deshabilitado (no borrado)
 
 ✅ **Fase 2 — Sesión web (C-01)** (esta pasada)
 - Tabla `sessions` (`session_id` = SHA-256 del cookie crudo, índice por `uuid`)
@@ -68,22 +86,35 @@
   `pub(crate)`, reusados por `account.rs` en vez de duplicar la lógica de leer/hashear la cookie
 - 50 tests en verde (32 unitarios + 18 de integración, 8 nuevos de C-02)
 
-**Pendiente de Fase 2 — no se hizo esta pasada:**
-- C-03: reroute de `ForgotPasswordPage`/`ResetPasswordPage` de `xindeler-web-landing`
-- `/api/session/login/2fa` — bloqueado hasta que Fase L (2FA) de `xindeler-auth` exista
+✅ **Fase 2 — Reroute forgot/reset-password (C-03)**
+- `authclient.rs` suma `forgot_password`/`reset_password`; `account.rs` suma
+  `POST /api/account/{forgot-password,reset-password}` (sin sesión, `forgot-password` siempre
+  `200 {ok:true}` anti-enumeración; `reset-password` revoca la sesión del llamador si trae una,
+  limitación conocida y documentada de no poder revocar *todas* las sesiones — `xindeler-auth`'s
+  `reset_password` no expone el `uuid`)
+- `xindeler-web-landing`: `ForgotPasswordPage.jsx`/`ResetPasswordPage.jsx` pasan a llamar acá en
+  vez de `auth.xindeler.com` directo
+- 56 tests en verde (32 unitarios + 24 de integración, 6 nuevos de C-03)
 
-### Fase 3 — Frontend consume la sesión
+**Pendiente de Fase 2:**
+- `/api/session/login/2fa` — bloqueado hasta que Fase L (2FA) de `xindeler-auth` exista (fuera de
+  alcance del backlog 007, no es un pendiente de esta pasada)
 
-Env vars + proxy de Vite en `xindeler-web-landing`, `AuthModal.jsx` deja de descartar el
-resultado del login. Base concreta para 005 (pantalla de cuenta) y 006 (personajes).
+✅ **Fase 3 — Frontend consume la sesión (D-01, D-02)**
+- D-01: env vars + proxy de Vite en `xindeler-web-landing` (`vite.config.js` suma
+  `server.proxy['/api']`, target configurable vía `VITE_API_PROXY_TARGET`); las 5 llamadas
+  same-origin pasan de URL absoluta a ruta relativa `/api/...`
+- D-02: `AuthModal.jsx` pasa su login de `auth.xindeler.com/generate_token` (descartaba el
+  resultado) a `POST /api/session/login` (establece una sesión real). Requirió primero arreglar
+  `session::login` para reenviar el `403 EMAIL_VERIFICATION_REQUIRED` tal cual (si no, el modal de
+  cuentas legacy se hubiera roto en silencio) — ver hallazgo/fix en `.backlog/README.md`
+- Deliberadamente fuera de alcance: ningún indicador de "sesión activa" en la UI (navbar, logout) —
+  pertenece a la pantalla de cuenta (005), todavía sin diseñar
 
-## Orden de prioridad actual
+## Orden de prioridad — completado (2026-08-15)
 
 Decidido por Matías (2026-08-15): terminar todo el backlog de código primero, deploy al final —
-así el corte de producción sale con todo andando de una, no en pedazos.
-
-1. Fase 2 C-03 (reroute forgot/reset-password) — completa lo que falta de la sesión web.
-2. Fase 3 (frontend consume la sesión) — cierra el círculo del backlog 007.
-3. Fase 1 B-05 (corte de producción) — **última**, a propósito. Bloqueada hasta confirmación
-   explícita de Matías, toca datos reales de usuarios; se hace una sola vez con todo el backlog
-   ya resuelto en vez de deployar en fases.
+así el corte de producción sale con todo andando de una, no en pedazos. Las cuatro fases se
+completaron en ese orden y el corte de producción (B-05) se ejecutó al final, con confirmación
+explícita de Matías en cada paso que tocaba el VPS real (instalar systemd, tocar nginx, apagar el
+servicio Python).
