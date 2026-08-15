@@ -80,23 +80,40 @@ WEB_API_BIND_ADDR=127.0.0.1:8020 cargo run -p xindeler-web-api-server
 | `POST` | `/api/account/delete` | ✅ Fase 2 |
 | `POST` | `/api/account/forgot-password` | ✅ Fase 2 (C-03) |
 | `POST` | `/api/account/reset-password` | ✅ Fase 2 (C-03) |
+| `POST` | `/api/session/login/2fa` | ✅ Fase 2 (005) |
+| `POST` | `/api/account/2fa/enroll` | ✅ Fase 2 (005) |
+| `POST` | `/api/account/2fa/confirm` | ✅ Fase 2 (005) |
+| `POST` | `/api/account/2fa/disable` | ✅ Fase 2 (005) |
+| `POST` | `/api/account/2fa/backup-codes/regenerate` | ✅ Fase 2 (005) |
 
 Los endpoints de `/api/account/*` que exigen sesión activa (`change-username`, `change-password`,
-`delete`) usan el `username` de la sesión — nunca uno provisto por el cliente — y **revocan todas
-las sesiones de la cuenta** en el mismo request en que `xindeler-auth` confirma el cambio,
-forzando un relogin. Si `xindeler-auth` rechaza el cambio (contraseña actual incorrecta, etc.), la
-sesión sigue viva sin tocar.
+`delete`, los cuatro de `2fa/*`) usan el `username` de la sesión — nunca uno provisto por el
+cliente — y **revocan todas las sesiones de la cuenta** en el mismo request en que `xindeler-auth`
+confirma el cambio, forzando un relogin (la excepción es `2fa/confirm`: activar 2FA no reduce la
+seguridad de la cuenta, así que no fuerza relogin). Si `xindeler-auth` rechaza el cambio
+(contraseña actual incorrecta, código TOTP inválido, etc.), la sesión sigue viva sin tocar.
 
-`check-username`, `forgot-password` y `reset-password` **no** requieren sesión — son los flujos de
-"todavía no puedo loguearme". `forgot-password` siempre responde `200 {ok:true}`, exista o no la
-cuenta (anti-enumeración, igual que `xindeler-auth`). `reset-password` tiene una limitación
-conocida: `xindeler-auth` resuelve el `uuid` de la cuenta internamente para aplicar el reset pero
-no lo devuelve, así que este servicio no puede revocar *todas* las sesiones de la cuenta en ese
-request como sí hace con `change-password` — forzarle ese cambio de contrato a `xindeler-auth`
-queda fuera de alcance (ver `.backlog/SPEC.md`). El TTL de 7 días de la cookie es la mitigación
-real de este hueco; como bonus sin costo, si el llamado a `reset-password` todavía trae una cookie
-de sesión válida (p. ej. reseteando desde una pestaña que ya estaba logueada), esa sesión puntual
-sí se revoca.
+`check-username`, `forgot-password`, `reset-password` y `session/login/2fa` **no** requieren
+sesión — son los flujos de "todavía no puedo loguearme" (incluido el segundo factor del login).
+`forgot-password` siempre responde `200 {ok:true}`, exista o no la cuenta (anti-enumeración, igual
+que `xindeler-auth`). `reset-password` tiene una limitación conocida: `xindeler-auth` resuelve el
+`uuid` de la cuenta internamente para aplicar el reset pero no lo devuelve, así que este servicio
+no puede revocar *todas* las sesiones de la cuenta en ese request como sí hace con
+`change-password` — forzarle ese cambio de contrato a `xindeler-auth` queda fuera de alcance (ver
+`.backlog/SPEC.md`). El TTL de 7 días de la cookie es la mitigación real de este hueco; como bonus
+sin costo, si el llamado a `reset-password` todavía trae una cookie de sesión válida (p. ej.
+reseteando desde una pestaña que ya estaba logueada), esa sesión puntual sí se revoca.
+
+**2FA (Fase L de `xindeler-auth`, tarea 005 de `xindeler-web-landing`):** cuando la cuenta tiene
+TOTP confirmado, `POST /api/session/login` responde `202 { challenge_id, expires_in }` en vez de
+crear la sesión directamente — recién `POST /api/session/login/2fa` (con el código de la app
+autenticadora) completa el login y deja la cookie. `GET /api/session/me` expone `totp_enabled` —
+estado **derivado**, no consultado a `xindeler-auth` (Fase L no expone ningún endpoint de "estado
+de TOTP"): se infiere de si el login pasó por el challenge, y se actualiza en cada
+`2fa/confirm`/`2fa/disable` exitoso a través de este proxy (ver `totp_status.rs`). Los errores
+específicos de TOTP (`TOTP_INVALID_CODE`, `ACCOUNT_2FA_LOCKED`, etc.) se reenvían con el mismo
+`code`/`message` que devuelve `xindeler-auth`, en vez de colapsarse a un error genérico — mismo
+criterio que ya se usaba para `EMAIL_VERIFICATION_REQUIRED`.
 
 ## Subcomandos CLI
 

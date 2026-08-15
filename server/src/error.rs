@@ -67,11 +67,14 @@ impl From<serde_json::Error> for ApiError {
 
 /// What a client is allowed to see. Kept separate from `ApiError` so an
 /// internal detail (a DB error, a panic) never leaks into a response body —
-/// same split `xindeler-auth` uses in its `error.rs`.
+/// same split `xindeler-auth` uses in its `error.rs`. `code`/`message` are
+/// `String`, not `&'static str`: `forwarded_response()` below needs to fill
+/// them with codes read from xindeler-auth's own response body (TOTP
+/// errors), not just this service's fixed catalog from `public_fields()`.
 #[derive(Debug, Serialize)]
 pub struct PublicErrorBody {
-    pub code: &'static str,
-    pub message: &'static str,
+    pub code: String,
+    pub message: String,
     pub request_id: String,
 }
 
@@ -104,9 +107,29 @@ pub fn response(error: ApiError) -> Response {
     // Cache-Control/Pragma/Referrer-Policy are applied uniformly to every
     // response (including this one) by web::finalize().
     Response::json(&PublicErrorBody {
+        code: code.to_owned(),
+        message: message.to_owned(),
+        request_id,
+    })
+    .with_status_code(error.status_code())
+}
+
+/// Forwards a `code`/`message` xindeler-auth itself produced (a TOTP-specific
+/// rejection like `TOTP_INVALID_CODE`, or `EMAIL_VERIFICATION_REQUIRED`)
+/// instead of collapsing it through the fixed catalog in `public_fields()`.
+/// Used when the specific code matters to the frontend and this service has
+/// nothing more specific to say than xindeler-auth already did.
+pub fn forwarded_response(status: u16, code: String, message: String) -> Response {
+    let request_id = hex::encode(rand::random::<[u8; 8]>());
+    if status >= 500 {
+        log::error!("request_id={request_id} request failed: forwarded {code} ({status})");
+    } else {
+        log::info!("request_id={request_id} request rejected code={code} (forwarded)");
+    }
+    Response::json(&PublicErrorBody {
         code,
         message,
         request_id,
     })
-    .with_status_code(error.status_code())
+    .with_status_code(status)
 }

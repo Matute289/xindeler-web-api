@@ -13,6 +13,7 @@ mod migrate_csv;
 mod ratelimit;
 mod session;
 mod state;
+mod totp_status;
 mod waitlist;
 mod web;
 

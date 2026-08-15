@@ -69,8 +69,9 @@ server/   → el binario
     digest.rs                 → subcomando CLI, digest mensual
     migrate_csv.rs             → subcomando CLI, migración one-shot CSV→SQLite
     authclient.rs              → cliente HTTP propio hacia xindeler-auth (NO xindeler-authc)
-    session.rs                 → login/logout/me + resolve_session/revoke_all_sessions (reusados por account.rs)
-    account.rs                  → proxy /api/account/* (check-username/change-username/change-password/delete/forgot-password/reset-password)
+    session.rs                 → login/login_2fa/logout/me + resolve_session/revoke_all_sessions (reusados por account.rs)
+    account.rs                  → proxy /api/account/* (check-username/change-username/change-password/delete/forgot-password/reset-password/2fa/*)
+    totp_status.rs              → estado derivado de 2FA por uuid (Fase L no expone ningún endpoint de estado)
 ```
 
 ## Esquema de base de datos
@@ -80,6 +81,10 @@ server/   → el binario
 - **Fase 2**: `sessions` (`session_id` = `SHA-256(cookie)`, `uuid`, `username`, `created_at`,
   `expires_at`, `revoked_at`) — índice por `uuid` para poder revocar todas las sesiones de una
   cuenta en el mismo request que un cambio de contraseña (hallazgo 8 de la tarea 007).
+- **Fase 2 (005)**: `totp_status` (`uuid` PK, `confirmed_at`) — estado de 2FA derivado, nunca
+  consultado a `xindeler-auth` (Fase L no expone ningún endpoint de "estado de TOTP"). Una fila
+  existe solo si la cuenta tiene TOTP confirmado; se actualiza cuando un login resuelve un
+  challenge de 2FA, o cuando `2fa/confirm`/`2fa/disable` tienen éxito a través de este proxy.
 
 ## API Endpoints
 
@@ -96,9 +101,15 @@ segundo es el mismo secreto que ya usa el game server contra `xindeler-auth`, `/
 ## Seguridad — notas críticas
 
 - Ninguna llamada mutable a `xindeler-auth` (`change_username`, `change_password`,
-  `delete_account`) se hace directo desde el frontend — pasan por proxy acá (`/api/account/*`),
-  autenticadas por la cookie de sesión, usando el `username` de la sesión (nunca uno provisto por
-  el cliente). `2fa/*` queda afuera hasta que Fase L de `xindeler-auth` exista.
+  `delete_account`, `2fa/*`) se hace directo desde el frontend — pasan por proxy acá
+  (`/api/account/*`), autenticadas por la cookie de sesión, usando el `username` de la sesión
+  (nunca uno provisto por el cliente).
+- Fase L de `xindeler-auth` (2FA/TOTP) está implementada y deployada (flag `AUTH_2FA_ENABLED`
+  apagado por default en xindeler-auth hasta que game/landing/overlord lo consuman). Cuando la
+  cuenta tiene TOTP confirmado, el login responde `202 { challenge_id }` en vez de crear sesión
+  directo — `POST /api/session/login/2fa` completa el segundo factor. Los errores TOTP-específicos
+  (`TOTP_INVALID_CODE`, `ACCOUNT_2FA_LOCKED`, etc.) se reenvían con el `code`/`message` real de
+  `xindeler-auth` en vez de colapsarse a un error genérico (`authclient.rs::is_totp_specific`).
 - Toda mutación exitosa de cuenta **revoca todas las sesiones de esa cuenta** en el mismo
   request (hallazgo 8 de la tarea 007) — nunca solo la actual, nunca en un job aparte. Si
   `xindeler-auth` rechaza el cambio, la sesión no se toca.
