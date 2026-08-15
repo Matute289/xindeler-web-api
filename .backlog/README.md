@@ -76,8 +76,23 @@ cookie de sesión válida. Total del repo: 56 tests (32 unitarios + 24 de integr
 
 | ID | Tarea | Estado |
 |---|---|---|
-| D-01 | Env vars + proxy de Vite en `xindeler-web-landing` para desarrollo local real | `todo` |
-| D-02 | `AuthModal.jsx` deja de descartar el resultado del login, primera versión de "hay alguien logueado" | `todo` |
+| D-01 | Env vars + proxy de Vite en `xindeler-web-landing` para desarrollo local real | `done` — `Matute289/xindeler-web-landing#41`. Las 5 llamadas same-origin (`waitlist`, `contribute`, `status`, `account/forgot-password`, `account/reset-password`) pasan de URL absoluta a ruta relativa `/api/...`; `vite.config.js` suma `server.proxy['/api']` con target configurable vía `VITE_API_PROXY_TARGET` (default: producción, mismo comportamiento de hoy) |
+| D-02 | `AuthModal.jsx` deja de descartar el resultado del login, primera versión de "hay alguien logueado" | `bloqueado` — ver hallazgo abajo, no se tocó esta pasada |
+
+**Hallazgo D-02 (2026-08-15): `POST /api/session/login` no puede reemplazar a `${AUTH_API}/generate_token`
+en `AuthModal.jsx` tal como está hoy.** `session::login`'s `map_sign_in_error` (`server/src/session.rs`)
+colapsa tanto `Rejected(401)` como `Rejected(403)` de `xindeler-auth` al mismo
+`ApiError::InvalidCredentials` genérico, sin reenviar el body. Pero `AuthModal.jsx` depende
+específicamente del body de un `403` con `code: "EMAIL_VERIFICATION_REQUIRED"` (`completion_token`,
+`deadline`) para abrir el modal de cuentas legacy que piden verificar el email — sin ese body, el
+flujo de recuperación de cuentas legacy queda invisible detrás de un mensaje genérico de "credenciales
+inválidas". Migrar el login de `AuthModal` a este proxy tal cual está hoy rompería ese flujo en
+silencio. Antes de tocar `AuthModal.jsx`, `session::login`/`map_sign_in_error` necesitan una decisión
+de diseño explícita sobre cómo distinguir y reenviar ese caso (¿pasar el `code` + `completion_token`
+tal cual, sin envolver? ¿el modal legacy sigue pegándole directo a `auth.xindeler.com` para
+`account-email`/`resend-verification` aunque el login pase por acá?) — no es un cambio que convenga
+hacer sin que Matías lo revise, así que queda pendiente para la próxima sesión en vez de forzarlo
+ahora que no está para chequear el flujo en el browser.
 
 ---
 
