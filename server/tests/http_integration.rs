@@ -422,6 +422,29 @@ fn invalid_credentials_return_401_without_setting_a_cookie() {
 }
 
 #[test]
+fn invalid_credentials_return_401_even_when_xindeler_auth_answers_400() {
+    // The real, deployed xindeler-auth answers AuthError::InvalidLogin with
+    // 400, not 401 (confirmed via the B-05 production smoke test) — this
+    // regressed silently before because FakeAuthServer's other login tests
+    // all used 401, which isn't what the real service sends. Without this,
+    // every wrong-password login attempt surfaced as a 502
+    // "authentication service unavailable" instead of a 401.
+    let auth = FakeAuthServer::start(&[("/generate_token", 400, "{}")]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/session/login"))
+        .json(&json!({"username": "tester", "password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 401);
+    assert_eq!(body_json(response)["code"], "INVALID_CREDENTIALS");
+}
+
+#[test]
 fn login_forwards_email_verification_required_verbatim_without_a_cookie() {
     let auth = FakeAuthServer::start(&[(
         "/generate_token",
