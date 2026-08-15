@@ -159,5 +159,58 @@ siendo el genérico de siempre). Total del repo: 58 tests (32 unitarios + 26 de 
 
 ---
 
+## Fase E — Proxy de 2FA/TOTP para la pantalla de cuenta (005 de `xindeler-web-landing`, 2026-08-15)
+
+`xindeler-auth` shippeó Fase L (G-03, 2FA/TOTP) el mismo día — PR #29, mergeado y desplegado en
+producción con el kill switch `AUTH_2FA_ENABLED` apagado por default. Esto desbloqueó la mitad del
+alcance de la tarea 005 de `xindeler-web-landing` (pantalla de cuenta) que estaba pendiente de ese
+contrato. Mismo criterio de siempre: nada mutable se llama directo desde el frontend a
+`auth.xindeler.com`, todo pasa por acá.
+
+- `authclient.rs` suma `totp_login`/`totp_enroll`/`totp_confirm`/`totp_disable`/
+  `totp_regenerate_backup_codes`, y `sign_in()` cambia de firma (`Result<SignInOutcome, _>`) para
+  distinguir un token directo de un `202` challenge de 2FA.
+- **Refactor transversal de manejo de errores**: `AuthClientError::Rejected(u16)` se reemplaza por
+  `RejectedWithBody{status, code, message}` en *todos* los métodos del cliente (no solo los
+  nuevos) — necesario para que `change_username`/`delete_account`/los cuatro de `2fa/*` puedan
+  reenviar códigos TOTP-específicos (`TOTP_INVALID_CODE`, `ACCOUNT_2FA_LOCKED`, etc.) en vez de
+  colapsarlos al error genérico de siempre. `map_sign_in_error`/`map_account_error`/
+  `map_recovery_error` se reescriben sobre el nuevo shape, preservando exactamente el mismo mapeo
+  status→error que ya tenían para los casos no-TOTP — verificado con los 62 tests que ya existían,
+  todos siguieron pasando sin tocarlos.
+- `error.rs` suma `forwarded_response(status, code, message)` — reenvía un error tal cual llegó de
+  `xindeler-auth` en vez de pasar por el catálogo fijo de `public_fields()`; `PublicErrorBody`
+  pasa de `&'static str` a `String` para poder llevar esos valores dinámicos.
+- `session::login` cambia: si la cuenta tiene TOTP confirmado, responde `202 { challenge_id,
+  expires_in }` sin sesión — hallazgo 2 de backlog 007, ahora real en vez de hipotético. Nuevo
+  `POST /api/session/login/2fa` completa el segundo factor y recién ahí crea la sesión.
+- `account.rs` suma `POST /api/account/2fa/{enroll,confirm,disable,backup-codes/regenerate}`
+  (requieren sesión, usan el `username` de la sesión). `change_username`/`delete_account` ganan un
+  campo `code` opcional, reenviado tal cual a `xindeler-auth` (no-op si la cuenta no tiene TOTP
+  confirmado — verificado leyendo `require_step_up_if_confirmed` en `xindeler-auth`, no asumido).
+- **Estado de 2FA derivado** (`totp_status.rs`, tabla `totp_status`): no existe ningún endpoint de
+  "estado de TOTP" en Fase L, así que se infiere de lo que este servicio ya observa — un login que
+  resolvió un challenge, o un `2fa/confirm`/`2fa/disable` exitoso a través de acá — en vez de
+  pedirle a `xindeler-auth` un contrato nuevo. Expuesto en `GET /api/session/me` como
+  `totp_enabled`.
+- `2fa/disable` revoca todas las sesiones de la cuenta (reduce seguridad, mismo criterio que
+  `change_password`); `2fa/confirm` no lo hace (activar 2FA no reduce seguridad).
+- Dependencia `xindeler-auth-common` actualizada al commit que incluye Fase L (`c40c3eb5...`,
+  antes pineada a un commit previo a esa PR).
+- **Hallazgo adicional, mismo PR:** `change_username` puede fallar con `400` por cuatro razones
+  *distintas* — contraseña incorrecta, nombre ya tomado (`USERNAME_UNAVAILABLE`), nombre reservado
+  (`USERNAME_RESERVED`), o cambiado hace menos de 30 días (`USERNAME_CHANGE_COOLDOWN`) — confirmado
+  leyendo `auth::change_username` en `xindeler-auth`, no asumido. Solo la primera es genuinamente
+  "credenciales inválidas"; las otras tres se sumaron a la lista de códigos que se reenvían
+  verbatim (`should_forward_verbatim`, renombrada desde `is_totp_specific` para reflejar que ya no
+  es solo sobre TOTP) — antes las cuatro colapsaban al mismo `INVALID_CREDENTIALS` genérico.
+
+Tests nuevos: 17 tests de integración (challenge de login, forwarding de errores TOTP-específicos y
+del cooldown de username en login/2fa y en change-username, los cuatro endpoints de `2fa/*`, estado
+derivado tras confirm/disable) + 3 unitarios de `totp_status`. Total del repo: 74 tests (35
+unitarios + 39 de integración).
+
+---
+
 Detalle completo de decisiones de diseño en `SPEC.md`, plan de trabajo con próximos pasos
 concretos en `PLAN.md`.

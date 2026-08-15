@@ -749,6 +749,376 @@ fn reset_password_revokes_the_callers_session_when_one_is_present() {
     assert_eq!(me.status(), 401);
 }
 
+// --- 005: 2FA/TOTP proxy tests ---
+
+const TOTP_CHALLENGE_ID: &str = "0123456789abcdef0123456789abcdef";
+
+#[test]
+fn login_with_totp_confirmed_returns_a_202_challenge_without_a_cookie() {
+    let auth = FakeAuthServer::start(&[(
+        "/generate_token",
+        202,
+        r#"{"challenge_id":"0123456789abcdef0123456789abcdef","expires_in":300}"#,
+    )]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/session/login"))
+        .json(&json!({"username": "tester", "password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 202);
+    assert!(response.headers().get("set-cookie").is_none());
+    let body = body_json(response);
+    assert_eq!(body["challenge_id"], TOTP_CHALLENGE_ID);
+    assert_eq!(body["expires_in"], 300);
+}
+
+#[test]
+fn login_2fa_completes_the_challenge_and_marks_the_session_totp_enabled() {
+    let auth = FakeAuthServer::start(&[
+        (
+            "/login/2fa",
+            200,
+            r#"{"token":"0123456789abcdef0123456789abcdef"}"#,
+        ),
+        VERIFY_OK,
+    ]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+
+    let response = client
+        .post(server.url("/api/session/login/2fa"))
+        .json(&json!({"challenge_id": TOTP_CHALLENGE_ID, "code": "123456"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let cookie = response
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    assert_eq!(body_json(response)["totp_enabled"], true);
+
+    let me = client
+        .get(server.url("/api/session/me"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(me.status(), 200);
+    assert_eq!(body_json(me)["totp_enabled"], true);
+}
+
+#[test]
+fn login_2fa_forwards_an_invalid_code_verbatim() {
+    let auth = FakeAuthServer::start(&[(
+        "/login/2fa",
+        400,
+        r#"{"code":"TOTP_INVALID_CODE","message":"The code was incorrect.","request_id":"x"}"#,
+    )]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/session/login/2fa"))
+        .json(&json!({"challenge_id": TOTP_CHALLENGE_ID, "code": "000000"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    assert!(response.headers().get("set-cookie").is_none());
+    assert_eq!(body_json(response)["code"], "TOTP_INVALID_CODE");
+}
+
+#[test]
+fn login_2fa_rejects_a_malformed_challenge_id() {
+    let server = TestServer::start();
+
+    let response = Client::new()
+        .post(server.url("/api/session/login/2fa"))
+        .json(&json!({"challenge_id": "not-hex", "code": "123456"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 422);
+}
+
+#[test]
+fn totp_endpoints_require_a_session() {
+    let server = TestServer::start();
+    let client = Client::new();
+
+    let enroll = client
+        .post(server.url("/api/account/2fa/enroll"))
+        .json(&json!({"password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(enroll.status(), 401);
+
+    let confirm = client
+        .post(server.url("/api/account/2fa/confirm"))
+        .json(&json!({"password_prehash": "deadbeef", "code": "123456"}))
+        .send()
+        .unwrap();
+    assert_eq!(confirm.status(), 401);
+
+    let disable = client
+        .post(server.url("/api/account/2fa/disable"))
+        .json(&json!({"password_prehash": "deadbeef", "code": "123456"}))
+        .send()
+        .unwrap();
+    assert_eq!(disable.status(), 401);
+
+    let regenerate = client
+        .post(server.url("/api/account/2fa/backup-codes/regenerate"))
+        .json(&json!({"password_prehash": "deadbeef", "code": "123456"}))
+        .send()
+        .unwrap();
+    assert_eq!(regenerate.status(), 401);
+}
+
+#[test]
+fn totp_enroll_returns_the_qr_and_secret() {
+    let auth = FakeAuthServer::start(&[
+        SIGN_IN_OK,
+        VERIFY_OK,
+        (
+            "/2fa/enroll",
+            200,
+            r#"{"secret_base32":"JBSWY3DPEHPK3PXP","otpauth_url":"otpauth://totp/Xindeler:tester","qr_png_base64":"iVBORw0KG=="}"#,
+        ),
+    ]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/2fa/enroll"))
+        .header("Cookie", &cookie)
+        .json(&json!({"password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body = body_json(response);
+    assert_eq!(body["secret_base32"], "JBSWY3DPEHPK3PXP");
+    assert_eq!(body["qr_png_base64"], "iVBORw0KG==");
+}
+
+#[test]
+fn totp_confirm_marks_the_account_as_totp_enabled_without_revoking_the_session() {
+    let auth = FakeAuthServer::start(&[
+        SIGN_IN_OK,
+        VERIFY_OK,
+        (
+            "/2fa/confirm",
+            200,
+            r#"{"backup_codes":["aaaa1111","bbbb2222"]}"#,
+        ),
+    ]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/2fa/confirm"))
+        .header("Cookie", &cookie)
+        .json(&json!({"password_prehash": "deadbeef", "code": "123456"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        body_json(response)["backup_codes"],
+        json!(["aaaa1111", "bbbb2222"])
+    );
+
+    // Confirming a new enrollment doesn't need to force a relogin — unlike
+    // disabling it, it doesn't reduce the account's security.
+    let me = client
+        .get(server.url("/api/session/me"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(me.status(), 200);
+    assert_eq!(body_json(me)["totp_enabled"], true);
+}
+
+#[test]
+fn totp_disable_marks_totp_disabled_and_revokes_the_session() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ("/2fa/disable", 200, "Ok")]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/2fa/disable"))
+        .header("Cookie", &cookie)
+        .json(&json!({"password_prehash": "deadbeef", "code": "123456"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    let me = client
+        .get(server.url("/api/session/me"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(me.status(), 401);
+}
+
+#[test]
+fn totp_disable_forwards_account_locked_verbatim() {
+    let auth = FakeAuthServer::start(&[
+        SIGN_IN_OK,
+        VERIFY_OK,
+        (
+            "/2fa/disable",
+            423,
+            r#"{"code":"ACCOUNT_2FA_LOCKED","message":"This account is locked after repeated incorrect 2FA codes. Contact support.","request_id":"x"}"#,
+        ),
+    ]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/2fa/disable"))
+        .header("Cookie", &cookie)
+        .json(&json!({"password_prehash": "deadbeef", "code": "000000"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 423);
+    assert_eq!(body_json(response)["code"], "ACCOUNT_2FA_LOCKED");
+
+    // Locked-out rejection doesn't touch the session — it's not a
+    // successful disable, so there's nothing to force a relogin over.
+    let me = client
+        .get(server.url("/api/session/me"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(me.status(), 200);
+}
+
+#[test]
+fn totp_backup_codes_regenerate_returns_new_codes() {
+    let auth = FakeAuthServer::start(&[
+        SIGN_IN_OK,
+        VERIFY_OK,
+        (
+            "/2fa/backup-codes/regenerate",
+            200,
+            r#"{"backup_codes":["cccc3333","dddd4444"]}"#,
+        ),
+    ]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/2fa/backup-codes/regenerate"))
+        .header("Cookie", &cookie)
+        .json(&json!({"password_prehash": "deadbeef", "code": "123456"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        body_json(response)["backup_codes"],
+        json!(["cccc3333", "dddd4444"])
+    );
+}
+
+#[test]
+fn change_username_forwards_totp_invalid_code_instead_of_generic_401() {
+    let auth = FakeAuthServer::start(&[
+        SIGN_IN_OK,
+        VERIFY_OK,
+        (
+            "/change_username",
+            400,
+            r#"{"code":"TOTP_INVALID_CODE","message":"The code was incorrect.","request_id":"x"}"#,
+        ),
+    ]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/change-username"))
+        .header("Cookie", &cookie)
+        .json(&json!({"new_username": "newname", "password_prehash": "deadbeef", "code": "000000"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    assert_eq!(body_json(response)["code"], "TOTP_INVALID_CODE");
+
+    // A rejected change (even a TOTP-specific one) must not revoke the
+    // session — same invariant as the plain-401 case already covered by
+    // change_password_with_wrong_current_password_does_not_revoke_the_session.
+    let me = client
+        .get(server.url("/api/session/me"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(me.status(), 200);
+}
+
+#[test]
+fn change_username_forwards_the_30_day_cooldown_instead_of_generic_401() {
+    let auth = FakeAuthServer::start(&[
+        SIGN_IN_OK,
+        VERIFY_OK,
+        (
+            "/change_username",
+            400,
+            r#"{"code":"USERNAME_CHANGE_COOLDOWN","message":"That account changed its username recently.","request_id":"x"}"#,
+        ),
+    ]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/change-username"))
+        .header("Cookie", &cookie)
+        .json(&json!({"new_username": "newname", "password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    assert_eq!(body_json(response)["code"], "USERNAME_CHANGE_COOLDOWN");
+}
+
 #[test]
 fn every_response_carries_privacy_and_cors_headers() {
     let server = TestServer::start();

@@ -1,13 +1,17 @@
-use crate::authclient::AuthClientError;
+use crate::authclient::{should_forward_verbatim, AuthClientError, SignInOutcome};
 use crate::db::db;
-use crate::error::ApiError;
+use crate::error::{self, ApiError};
 use crate::http::{Request, Response};
 use crate::state::AppState;
+use crate::totp_status;
 use chrono::Utc;
 use rusqlite::{params, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
-use xindeler_web_api_common::{LoginPayload, MeResponse, OkResponse};
+use xindeler_auth_common::AuthToken;
+use xindeler_web_api_common::{
+    LoginPayload, LoginTotpChallengeResponse, LoginTotpRequest, MeResponse, OkResponse,
+};
 
 const SESSION_COOKIE: &str = "session";
 
@@ -99,12 +103,14 @@ fn map_sign_in_error(err: AuthClientError) -> ApiError {
         // an EMAIL_VERIFICATION_REQUIRED-shaped 403 whose body didn't parse
         // (login() intercepts the well-formed case before this function
         // ever runs — see AuthClientError::EmailVerificationRequired).
-        AuthClientError::Rejected(400)
-        | AuthClientError::Rejected(401)
-        | AuthClientError::Rejected(403) => ApiError::InvalidCredentials,
-        AuthClientError::Rejected(429) => ApiError::RateLimit,
-        AuthClientError::Rejected(status) => {
-            log::warn!("xindeler-auth answered with unexpected status {status}");
+        AuthClientError::RejectedWithBody { status, .. }
+            if status == 400 || status == 401 || status == 403 =>
+        {
+            ApiError::InvalidCredentials
+        }
+        AuthClientError::RejectedWithBody { status: 429, .. } => ApiError::RateLimit,
+        AuthClientError::RejectedWithBody { status, code, .. } => {
+            log::warn!("xindeler-auth answered with unexpected status {status} (code={code})");
             ApiError::UpstreamAuthError
         }
         AuthClientError::Request(err) => {
@@ -124,6 +130,47 @@ fn map_sign_in_error(err: AuthClientError) -> ApiError {
     }
 }
 
+/// Shared tail end of both login paths (direct token, or after redeeming a
+/// 2FA challenge): resolve the token's identity, create the session row,
+/// record the now-known TOTP status, set the cookie. `totp_confirmed` is
+/// `false` for a direct login (xindeler-auth would have issued a challenge
+/// instead if the account had TOTP confirmed) and `true` after `/login/2fa`
+/// succeeds — either way it's a fact this call already knows, not a guess.
+fn create_session(
+    auth_token: AuthToken,
+    fallback_username: String,
+    totp_confirmed: bool,
+    state: &AppState,
+) -> Result<Response, ApiError> {
+    let verified = state
+        .auth_client
+        .verify(auth_token)
+        .map_err(map_sign_in_error)?;
+    let username = verified.username.unwrap_or(fallback_username);
+    let uuid = verified.uuid.to_string();
+
+    let raw_session = generate_session_token();
+    let session_id = hash_token(&raw_session);
+    let now = Utc::now().timestamp();
+
+    db()?.execute(
+        "INSERT INTO sessions (session_id, uuid, username, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![session_id, uuid, username, now, now + SESSION_TTL_SECS],
+    )?;
+
+    if totp_confirmed {
+        totp_status::mark_confirmed(&uuid)?;
+    } else {
+        totp_status::mark_disabled(&uuid)?;
+    }
+
+    let response = Response::json(&MeResponse {
+        username,
+        totp_enabled: totp_confirmed,
+    });
+    Ok(set_cookie(response, &raw_session, SESSION_TTL_SECS))
+}
+
 pub fn login(body: &[u8], remote_ip: IpAddr, state: &AppState) -> Result<Response, ApiError> {
     let payload: LoginPayload = serde_json::from_slice(body)?;
     if payload.username.trim().is_empty() || payload.password_prehash.trim().is_empty() {
@@ -136,17 +183,11 @@ pub fn login(body: &[u8], remote_ip: IpAddr, state: &AppState) -> Result<Respons
         return Err(ApiError::RateLimit);
     }
 
-    // Fase L (2FA) of xindeler-auth is designed but not implemented: today
-    // /generate_token always answers with a token directly, never a
-    // challenge. Once it exists, a 202 response here must NOT establish a
-    // session — see hallazgo 2 of backlog 007 (the session can only start
-    // after the second factor is confirmed, or a present-but-2FA-off cookie
-    // would itself leak that the account has no 2FA).
-    let auth_token = match state
+    let outcome = match state
         .auth_client
         .sign_in(&payload.username, &payload.password_prehash)
     {
-        Ok(token) => token,
+        Ok(outcome) => outcome,
         // Forwarded verbatim, not through the generic error envelope — the
         // frontend's legacy account-recovery modal needs the exact
         // completion_token/deadline shape xindeler-auth already returns.
@@ -156,35 +197,61 @@ pub fn login(body: &[u8], remote_ip: IpAddr, state: &AppState) -> Result<Respons
         Err(err) => return Err(map_sign_in_error(err)),
     };
 
-    let verified = state
-        .auth_client
-        .verify(auth_token)
-        .map_err(map_sign_in_error)?;
-    let username = verified.username.unwrap_or(payload.username);
+    match outcome {
+        SignInOutcome::Token(token) => create_session(token, payload.username, false, state),
+        // The account has a confirmed TOTP enrollment — hallazgo 2 of
+        // backlog 007: no session gets created until the second factor is
+        // confirmed via login_2fa() below, or a present-but-2FA-off cookie
+        // would itself leak that the account has no 2FA.
+        SignInOutcome::TotpChallenge {
+            challenge_id,
+            expires_in,
+        } => Ok(Response::json(&LoginTotpChallengeResponse {
+            challenge_id: challenge_id.serialize(),
+            expires_in,
+        })
+        .with_status_code(202)),
+    }
+}
 
-    let raw_session = generate_session_token();
-    let session_id = hash_token(&raw_session);
-    let now = Utc::now().timestamp();
+pub fn login_2fa(body: &[u8], state: &AppState) -> Result<Response, ApiError> {
+    let payload: LoginTotpRequest = serde_json::from_slice(body)?;
+    if payload.challenge_id.trim().is_empty() || payload.code.trim().is_empty() {
+        return Err(ApiError::InvalidRequest(
+            "challenge_id and code are required".into(),
+        ));
+    }
+    let challenge_id = payload
+        .challenge_id
+        .parse()
+        .map_err(|_| ApiError::InvalidRequest("challenge_id is malformed".into()))?;
 
-    db()?.execute(
-        "INSERT INTO sessions (session_id, uuid, username, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![
-            session_id,
-            verified.uuid.to_string(),
-            username,
-            now,
-            now + SESSION_TTL_SECS
-        ],
-    )?;
+    let auth_token = match state.auth_client.totp_login(challenge_id, &payload.code) {
+        Ok(token) => token,
+        Err(AuthClientError::RejectedWithBody {
+            status,
+            code,
+            message,
+        }) if should_forward_verbatim(&code) => {
+            return Ok(error::forwarded_response(status, code, message));
+        }
+        Err(err) => return Err(map_sign_in_error(err)),
+    };
 
-    let response = Response::json(&MeResponse { username });
-    Ok(set_cookie(response, &raw_session, SESSION_TTL_SECS))
+    // Unlike login(), this request carries no client-supplied username to
+    // fall back on if verify() omits it (see `ValidityCheckResponse`'s own
+    // doc comment on why that field is optional) — in the extremely
+    // unlikely case it's missing, create_session() falls back to an empty
+    // string rather than failing the whole login.
+    create_session(auth_token, String::new(), true, state)
 }
 
 pub fn me(request: &Request) -> Result<Response, ApiError> {
     let identity = resolve_session(request)?;
+    let totp_enabled = totp_status::is_enabled(&identity.uuid)?;
     Ok(Response::json(&MeResponse {
         username: identity.username,
+        totp_enabled,
     }))
 }
 

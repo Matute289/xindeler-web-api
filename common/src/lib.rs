@@ -55,6 +55,26 @@ pub struct LoginPayload {
 #[derive(Debug, Serialize)]
 pub struct MeResponse {
     pub username: String,
+    /// Derived, not read from xindeler-auth directly — see `totp.rs`. True
+    /// only once a login has actually resolved a TOTP challenge, or a
+    /// `2fa/confirm` succeeded through this same service.
+    pub totp_enabled: bool,
+}
+
+/// `202` response body for `POST /api/session/login` when the account has
+/// a confirmed TOTP enrollment — no cookie is set yet at this point.
+#[derive(Debug, Serialize)]
+pub struct LoginTotpChallengeResponse {
+    pub challenge_id: String,
+    pub expires_in: u64,
+}
+
+/// `POST /api/session/login/2fa` — no session cookie required, the
+/// `challenge_id` from `LoginTotpChallengeResponse` is the credential.
+#[derive(Debug, Deserialize)]
+pub struct LoginTotpRequest {
+    pub challenge_id: String,
+    pub code: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -66,10 +86,14 @@ pub struct AvailabilityResponse {
 /// trusted from the client). `password_prehash` is the account's *current*
 /// password — xindeler-auth re-validates it on every mutating call, session
 /// or not.
+/// `code` is the TOTP code — only required if `GET /api/session/me` says
+/// the account has 2FA enabled; a no-op on xindeler-auth's side otherwise.
 #[derive(Debug, Deserialize)]
 pub struct ChangeUsernameRequest {
     pub new_username: String,
     pub password_prehash: String,
+    #[serde(default)]
+    pub code: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,6 +105,8 @@ pub struct ChangePasswordRequest {
 #[derive(Debug, Deserialize)]
 pub struct DeleteAccountRequest {
     pub password_prehash: String,
+    #[serde(default)]
+    pub code: Option<String>,
 }
 
 /// No session required — this is the *forgot* your password flow, called
@@ -94,4 +120,35 @@ pub struct ForgotPasswordRequest {
 pub struct ResetPasswordRequest {
     pub token: String,
     pub new_password_prehash: String,
+}
+
+/// The four `/api/account/2fa/*` endpoints all require an active session
+/// (the `username` comes from it, never the client) and the account's
+/// current password, same reauth-per-sensitive-action pattern as
+/// `change-username`/`change-password`/`delete`.
+#[derive(Debug, Deserialize)]
+pub struct TotpEnrollRequest {
+    pub password_prehash: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TotpEnrollResponse {
+    pub secret_base32: String,
+    pub otpauth_url: String,
+    /// Pre-rendered by xindeler-auth — embed directly as
+    /// `data:image/png;base64,{qr_png_base64}`, no QR library needed here.
+    pub qr_png_base64: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TotpCodeRequest {
+    pub password_prehash: String,
+    pub code: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TotpBackupCodesResponse {
+    /// Shown once — xindeler-auth doesn't let a caller retrieve them again
+    /// short of `2fa/backup-codes/regenerate`, which invalidates the old set.
+    pub backup_codes: Vec<String>,
 }

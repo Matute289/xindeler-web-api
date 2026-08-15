@@ -92,6 +92,9 @@ fn dispatch(request: &Request, state: &AppState, network: &NetworkConfig) -> Res
         ("POST", "/api/session/login") => take_request_data(request)
             .and_then(|body| session::login(body, remote_ip, state))
             .unwrap_or_else(error::response),
+        ("POST", "/api/session/login/2fa") => take_request_data(request)
+            .and_then(|body| session::login_2fa(body, state))
+            .unwrap_or_else(error::response),
         ("GET", "/api/session/me") => session::me(request).unwrap_or_else(error::response),
         ("POST", "/api/session/logout") => session::logout(request).unwrap_or_else(error::response),
         ("GET", "/api/account/check-username") => {
@@ -111,6 +114,18 @@ fn dispatch(request: &Request, state: &AppState, network: &NetworkConfig) -> Res
             .unwrap_or_else(error::response),
         ("POST", "/api/account/reset-password") => take_request_data(request)
             .and_then(|body| account::reset_password(body, request, state))
+            .unwrap_or_else(error::response),
+        ("POST", "/api/account/2fa/enroll") => take_request_data(request)
+            .and_then(|body| account::totp_enroll(body, request, state))
+            .unwrap_or_else(error::response),
+        ("POST", "/api/account/2fa/confirm") => take_request_data(request)
+            .and_then(|body| account::totp_confirm(body, request, state))
+            .unwrap_or_else(error::response),
+        ("POST", "/api/account/2fa/disable") => take_request_data(request)
+            .and_then(|body| account::totp_disable(body, request, state))
+            .unwrap_or_else(error::response),
+        ("POST", "/api/account/2fa/backup-codes/regenerate") => take_request_data(request)
+            .and_then(|body| account::totp_regenerate_backup_codes(body, request, state))
             .unwrap_or_else(error::response),
         _ => Response::empty_404(),
     };
