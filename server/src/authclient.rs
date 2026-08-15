@@ -11,8 +11,9 @@
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use std::time::Duration;
 use xindeler_auth_common::{
-    AuthToken, ChangePasswordPayload, ChangeUsernamePayload, DeleteAccountPayload, SignInPayload,
-    SignInResponse, UsernameAvailabilityResponse, ValidityCheckPayload, ValidityCheckResponse,
+    AuthToken, ChangePasswordPayload, ChangeUsernamePayload, DeleteAccountPayload,
+    ForgotPasswordPayload, ResetPasswordPayload, SignInPayload, SignInResponse,
+    UsernameAvailabilityResponse, ValidityCheckPayload, ValidityCheckResponse,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -177,6 +178,45 @@ impl AuthClient {
         let response = self
             .client
             .post(format!("{}/delete_account", self.base_url))
+            .json(&payload)
+            .send()?;
+        if !response.status().is_success() {
+            return Err(AuthClientError::Rejected(response.status().as_u16()));
+        }
+        Ok(())
+    }
+
+    /// Always answers 200 on xindeler-auth's side, whether or not the email
+    /// exists — anti-enumeration, same as `/api/waitlist`'s dedup response.
+    /// A non-2xx here means the request itself was malformed, never "no
+    /// such account".
+    pub fn forgot_password(&self, email: &str) -> Result<(), AuthClientError> {
+        let payload = ForgotPasswordPayload {
+            email: email.to_owned(),
+        };
+        let response = self
+            .client
+            .post(format!("{}/forgot-password", self.base_url))
+            .json(&payload)
+            .send()?;
+        if !response.status().is_success() {
+            return Err(AuthClientError::Rejected(response.status().as_u16()));
+        }
+        Ok(())
+    }
+
+    pub fn reset_password(
+        &self,
+        token: &str,
+        new_password_prehash: &str,
+    ) -> Result<(), AuthClientError> {
+        let payload = ResetPasswordPayload {
+            token: token.to_owned(),
+            new_password: new_password_prehash.to_owned(),
+        };
+        let response = self
+            .client
+            .post(format!("{}/reset-password", self.base_url))
             .json(&payload)
             .send()?;
         if !response.status().is_success() {

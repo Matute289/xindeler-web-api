@@ -89,6 +89,27 @@ La dependencia de `xindeler-auth-common` sigue siendo un repo privado consumido 
 público — resuelto con el mismo patrón que `xindeler-new-horizon`/`xindeler-zuul`: deploy key de
 solo lectura (`AUTH_REPO_SSH_KEY`) + `.cargo/config.toml` con `git-fetch-with-cli`.
 
+### `xindeler-auth` — límites de lo que este servicio le puede pedir (C-03)
+
+Principio general: **no le pide a `xindeler-auth` que cambie su contrato unilateralmente** — este
+servicio se adapta a lo que `xindeler-auth` expone hoy, en vez de forzar cambios en un repo que no
+es este. `reset_password()` (en `xindeler-auth/server/src/auth.rs`) resuelve el `uuid` de la
+cuenta internamente vía `password_reset_tokens`, pero solo devuelve `Result<(), AuthError>` — el
+`uuid` nunca sale de esa función. Consecuencia directa: `POST /api/account/reset-password` acá no
+puede revocar *todas* las sesiones de la cuenta como sí hace `change-password` (que sí conoce el
+`uuid` porque viene de una sesión activa). Se documentó como limitación aceptada en vez de bloquear
+C-03 pidiendo un cambio de contrato:
+
+- El TTL absoluto de 7 días de la cookie (sin renovación deslizante) es la mitigación real —
+  cualquier sesión abierta antes de un reset expira sola en, como mucho, una semana.
+- Bonus sin costo: si el request de `reset-password` todavía trae una cookie de sesión válida
+  (reset hecho desde una pestaña que ya estaba logueada), esa sesión puntual sí se revoca — no
+  cubre el caso general (usuario deslogueado reseteando desde el mail), pero no cuesta nada
+  agregarlo.
+- Si en el futuro hace falta revocación completa, la vía correcta es coordinar con `xindeler-auth`
+  para que `reset_password()` devuelva el `uuid` — trabajo nuevo en ese repo, no algo que
+  `xindeler-web-api` pueda resolver por su cuenta.
+
 ## Gaps conocidos vs. producción robusta
 
 - **Fase 0** (actual): sin lógica de negocio, sin persistencia, sin secrets. Solo `/ping`.

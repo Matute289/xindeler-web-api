@@ -78,13 +78,25 @@ WEB_API_BIND_ADDR=127.0.0.1:8020 cargo run -p xindeler-web-api-server
 | `POST` | `/api/account/change-username` | ✅ Fase 2 |
 | `POST` | `/api/account/change-password` | ✅ Fase 2 |
 | `POST` | `/api/account/delete` | ✅ Fase 2 |
-| — | Reroute de `forgot-password`/`reset-password` del frontend | ⏳ Fase 2 (C-03) |
+| `POST` | `/api/account/forgot-password` | ✅ Fase 2 (C-03) |
+| `POST` | `/api/account/reset-password` | ✅ Fase 2 (C-03) |
 
-Los cuatro endpoints de `/api/account/*` (salvo `check-username`) exigen sesión activa (cookie),
-usan el `username` de la sesión — nunca uno provisto por el cliente — y **revocan todas las
-sesiones de la cuenta** en el mismo request en que `xindeler-auth` confirma el cambio, forzando
-un relogin. Si `xindeler-auth` rechaza el cambio (contraseña actual incorrecta, etc.), la sesión
-sigue viva sin tocar.
+Los endpoints de `/api/account/*` que exigen sesión activa (`change-username`, `change-password`,
+`delete`) usan el `username` de la sesión — nunca uno provisto por el cliente — y **revocan todas
+las sesiones de la cuenta** en el mismo request en que `xindeler-auth` confirma el cambio,
+forzando un relogin. Si `xindeler-auth` rechaza el cambio (contraseña actual incorrecta, etc.), la
+sesión sigue viva sin tocar.
+
+`check-username`, `forgot-password` y `reset-password` **no** requieren sesión — son los flujos de
+"todavía no puedo loguearme". `forgot-password` siempre responde `200 {ok:true}`, exista o no la
+cuenta (anti-enumeración, igual que `xindeler-auth`). `reset-password` tiene una limitación
+conocida: `xindeler-auth` resuelve el `uuid` de la cuenta internamente para aplicar el reset pero
+no lo devuelve, así que este servicio no puede revocar *todas* las sesiones de la cuenta en ese
+request como sí hace con `change-password` — forzarle ese cambio de contrato a `xindeler-auth`
+queda fuera de alcance (ver `.backlog/SPEC.md`). El TTL de 7 días de la cookie es la mitigación
+real de este hueco; como bonus sin costo, si el llamado a `reset-password` todavía trae una cookie
+de sesión válida (p. ej. reseteando desde una pestaña que ya estaba logueada), esa sesión puntual
+sí se revoca.
 
 ## Subcomandos CLI
 

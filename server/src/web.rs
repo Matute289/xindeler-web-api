@@ -106,7 +106,12 @@ fn dispatch(request: &Request, state: &AppState, network: &NetworkConfig) -> Res
         ("POST", "/api/account/delete") => take_request_data(request)
             .and_then(|body| account::delete_account(body, request, state))
             .unwrap_or_else(error::response),
-        // Fase 2 also adds: reroute de forgot/reset-password (C-03).
+        ("POST", "/api/account/forgot-password") => take_request_data(request)
+            .and_then(|body| account::forgot_password(body, state))
+            .unwrap_or_else(error::response),
+        ("POST", "/api/account/reset-password") => take_request_data(request)
+            .and_then(|body| account::reset_password(body, request, state))
+            .unwrap_or_else(error::response),
         _ => Response::empty_404(),
     };
 

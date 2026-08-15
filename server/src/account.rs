@@ -12,7 +12,7 @@ use crate::session::{clear_cookie, resolve_session, revoke_all_sessions};
 use crate::state::AppState;
 use xindeler_web_api_common::{
     AvailabilityResponse, ChangePasswordRequest, ChangeUsernameRequest, DeleteAccountRequest,
-    OkResponse,
+    ForgotPasswordRequest, OkResponse, ResetPasswordRequest,
 };
 
 fn map_account_error(err: AuthClientError) -> ApiError {
@@ -32,6 +32,31 @@ fn map_account_error(err: AuthClientError) -> ApiError {
         AuthClientError::MissingServiceToken => {
             // None of the four calls in this module use the service token
             // (see authclient.rs) — reachable only if that ever changes.
+            log::error!("account proxy hit MissingServiceToken unexpectedly");
+            ApiError::InternalServerError
+        }
+    }
+}
+
+/// Same shape as `map_account_error`, but a 400 here means a malformed
+/// email or an invalid/expired reset token — never "wrong password", so it
+/// maps to `InvalidRequest` instead of `InvalidCredentials`. Neither
+/// forgot-password nor reset-password ever authenticates with a password.
+fn map_recovery_error(err: AuthClientError) -> ApiError {
+    match err {
+        AuthClientError::Rejected(400) => {
+            ApiError::InvalidRequest("xindeler-auth rejected the request".into())
+        }
+        AuthClientError::Rejected(429) => ApiError::RateLimit,
+        AuthClientError::Rejected(status) => {
+            log::warn!("xindeler-auth answered with unexpected status {status}");
+            ApiError::UpstreamAuthError
+        }
+        AuthClientError::Request(err) => {
+            log::warn!("request to xindeler-auth failed: {err}");
+            ApiError::UpstreamAuthError
+        }
+        AuthClientError::MissingServiceToken => {
             log::error!("account proxy hit MissingServiceToken unexpectedly");
             ApiError::InternalServerError
         }
@@ -129,5 +154,55 @@ pub fn delete_account(
         .map_err(map_account_error)?;
 
     revoke_all_sessions(&identity.uuid)?;
+    Ok(clear_cookie(Response::json(&OkResponse { ok: true })))
+}
+
+/// No session required — this is the "forgot password, can't log in" flow.
+/// Always 200 regardless of whether the email is registered, matching
+/// xindeler-auth's own anti-enumeration behavior on `/forgot-password`.
+pub fn forgot_password(body: &[u8], state: &AppState) -> Result<Response, ApiError> {
+    let payload: ForgotPasswordRequest = serde_json::from_slice(body)?;
+    if payload.email.trim().is_empty() {
+        return Err(ApiError::InvalidRequest("email is required".into()));
+    }
+    state
+        .auth_client
+        .forgot_password(&payload.email)
+        .map_err(map_recovery_error)?;
+    Ok(Response::json(&OkResponse { ok: true }))
+}
+
+/// No session required — the whole point of a reset token is proving
+/// identity *without* one. Known limitation, not fixed here: xindeler-auth's
+/// `reset_password` doesn't return the uuid it just updated, so this can't
+/// revoke every session for the account the way `change_password` does —
+/// forcing that contract change on xindeler-auth is out of scope (see
+/// `.backlog/SPEC.md`, "no le pide a xindeler-auth que cambie su contrato").
+/// The 7-day session TTL is what actually bounds this gap (hallazgo 8 of
+/// backlog 007). As a same-request bonus that costs nothing: if the caller
+/// happens to still be carrying a session cookie for the account being
+/// reset (e.g. resetting from a tab that was already logged in), that one
+/// session is revoked too.
+pub fn reset_password(
+    body: &[u8],
+    request: &Request,
+    state: &AppState,
+) -> Result<Response, ApiError> {
+    let payload: ResetPasswordRequest = serde_json::from_slice(body)?;
+    if payload.token.trim().is_empty() || payload.new_password_prehash.trim().is_empty() {
+        return Err(ApiError::InvalidRequest(
+            "token and new_password_prehash are required".into(),
+        ));
+    }
+
+    state
+        .auth_client
+        .reset_password(&payload.token, &payload.new_password_prehash)
+        .map_err(map_recovery_error)?;
+
+    if let Ok(identity) = resolve_session(request) {
+        revoke_all_sessions(&identity.uuid)?;
+    }
+
     Ok(clear_cookie(Response::json(&OkResponse { ok: true })))
 }
