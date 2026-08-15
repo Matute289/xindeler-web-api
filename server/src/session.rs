@@ -1,4 +1,4 @@
-use crate::authclient::{is_totp_specific, AuthClientError, SignInOutcome};
+use crate::authclient::{should_forward_verbatim, AuthClientError, SignInOutcome};
 use crate::db::db;
 use crate::error::{self, ApiError};
 use crate::http::{Request, Response};
@@ -232,7 +232,7 @@ pub fn login_2fa(body: &[u8], state: &AppState) -> Result<Response, ApiError> {
             status,
             code,
             message,
-        }) if is_totp_specific(&code) => {
+        }) if should_forward_verbatim(&code) => {
             return Ok(error::forwarded_response(status, code, message));
         }
         Err(err) => return Err(map_sign_in_error(err)),

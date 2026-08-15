@@ -76,12 +76,21 @@ struct RemoteErrorBody {
 }
 
 /// Codes callers should forward verbatim (via `error::forwarded_response`)
-/// instead of collapsing through their usual generic error mapping — the
-/// frontend needs to tell these apart from a plain wrong-password rejection
-/// to show the right copy (a code entry field, a "locked, contact support"
-/// message, etc.), same reasoning already applied to
-/// `EMAIL_VERIFICATION_REQUIRED`.
-pub fn is_totp_specific(code: &str) -> bool {
+/// instead of collapsing through their usual generic status-based error
+/// mapping — the frontend needs to tell these apart from a plain
+/// wrong-password rejection to show the right copy (a code entry field, a
+/// "locked, contact support" message, a cooldown notice, etc.), same
+/// reasoning already applied to `EMAIL_VERIFICATION_REQUIRED`.
+///
+/// Two families share this list on purpose: the TOTP ones (any of the
+/// `/2fa/*`/`/login/2fa` calls, plus the step-up on `change_username`/
+/// `delete_account`) and `change_username`'s own non-step-up rejections —
+/// `change_username` can fail with `400` for four *semantically different*
+/// reasons (wrong password, name taken, name reserved, changed too
+/// recently — confirmed reading `auth::change_username` in xindeler-auth,
+/// not assumed), and only the first of those is genuinely
+/// `INVALID_CREDENTIALS`.
+pub fn should_forward_verbatim(code: &str) -> bool {
     matches!(
         code,
         "TOTP_INVALID_CODE"
@@ -90,6 +99,9 @@ pub fn is_totp_specific(code: &str) -> bool {
             | "TOTP_ALREADY_CONFIRMED"
             | "TOTP_CHALLENGE_INVALID"
             | "ACCOUNT_2FA_LOCKED"
+            | "USERNAME_UNAVAILABLE"
+            | "USERNAME_RESERVED"
+            | "USERNAME_CHANGE_COOLDOWN"
     )
 }
 

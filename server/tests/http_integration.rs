@@ -1092,6 +1092,34 @@ fn change_username_forwards_totp_invalid_code_instead_of_generic_401() {
 }
 
 #[test]
+fn change_username_forwards_the_30_day_cooldown_instead_of_generic_401() {
+    let auth = FakeAuthServer::start(&[
+        SIGN_IN_OK,
+        VERIFY_OK,
+        (
+            "/change_username",
+            400,
+            r#"{"code":"USERNAME_CHANGE_COOLDOWN","message":"That account changed its username recently.","request_id":"x"}"#,
+        ),
+    ]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/change-username"))
+        .header("Cookie", &cookie)
+        .json(&json!({"new_username": "newname", "password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    assert_eq!(body_json(response)["code"], "USERNAME_CHANGE_COOLDOWN");
+}
+
+#[test]
 fn every_response_carries_privacy_and_cors_headers() {
     let server = TestServer::start();
     let response = Client::new()

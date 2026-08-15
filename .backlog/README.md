@@ -197,11 +197,18 @@ contrato. Mismo criterio de siempre: nada mutable se llama directo desde el fron
   `change_password`); `2fa/confirm` no lo hace (activar 2FA no reduce seguridad).
 - Dependencia `xindeler-auth-common` actualizada al commit que incluye Fase L (`c40c3eb5...`,
   antes pineada a un commit previo a esa PR).
+- **Hallazgo adicional, mismo PR:** `change_username` puede fallar con `400` por cuatro razones
+  *distintas* — contraseña incorrecta, nombre ya tomado (`USERNAME_UNAVAILABLE`), nombre reservado
+  (`USERNAME_RESERVED`), o cambiado hace menos de 30 días (`USERNAME_CHANGE_COOLDOWN`) — confirmado
+  leyendo `auth::change_username` en `xindeler-auth`, no asumido. Solo la primera es genuinamente
+  "credenciales inválidas"; las otras tres se sumaron a la lista de códigos que se reenvían
+  verbatim (`should_forward_verbatim`, renombrada desde `is_totp_specific` para reflejar que ya no
+  es solo sobre TOTP) — antes las cuatro colapsaban al mismo `INVALID_CREDENTIALS` genérico.
 
-Tests nuevos: 15 tests de integración (challenge de login, forwarding de errores TOTP-específicos
-en login/2fa y en change-username, los cuatro endpoints de `2fa/*`, estado derivado tras
-confirm/disable) + 3 unitarios de `totp_status`. Total del repo: 73 tests (35 unitarios + 38 de
-integración).
+Tests nuevos: 17 tests de integración (challenge de login, forwarding de errores TOTP-específicos y
+del cooldown de username en login/2fa y en change-username, los cuatro endpoints de `2fa/*`, estado
+derivado tras confirm/disable) + 3 unitarios de `totp_status`. Total del repo: 74 tests (35
+unitarios + 39 de integración).
 
 ---
 

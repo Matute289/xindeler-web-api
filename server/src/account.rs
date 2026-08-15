@@ -5,7 +5,7 @@
 //! backlog 007), which `xindeler-auth` itself has no way to do since it
 //! doesn't know this service's sessions exist.
 
-use crate::authclient::{is_totp_specific, AuthClientError};
+use crate::authclient::{should_forward_verbatim, AuthClientError};
 use crate::error::{self, ApiError};
 use crate::http::{Request, Response};
 use crate::session::{clear_cookie, resolve_session, revoke_all_sessions};
@@ -88,7 +88,7 @@ fn map_or_forward(
         message,
     } = &err
     {
-        if is_totp_specific(code) {
+        if should_forward_verbatim(code) {
             return Ok(error::forwarded_response(
                 *status,
                 code.clone(),
