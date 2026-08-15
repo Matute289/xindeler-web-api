@@ -210,6 +210,16 @@ del cooldown de username en login/2fa y en change-username, los cuatro endpoints
 derivado tras confirm/disable) + 3 unitarios de `totp_status`. Total del repo: 74 tests (35
 unitarios + 39 de integración).
 
+**Deploy a producción (2026-08-15, mismo día).** `xindeler-web-api` no tiene CD automático (a
+diferencia de `xindeler-web-landing`, que sí deploya en cada push a `main`) — el binario del VPS se
+actualizó manualmente con el mismo patrón de B-05: `git pull` + `cargo build --release` en
+`/opt/xindeler-web-api/src`, binario anterior respaldado como `.previous2`, `systemctl restart`
+(con confirmación explícita de Matías, mismo criterio que toda acción con `sudo` sobre el VPS).
+Verificado end-to-end contra `https://xindeler.com` real: `/api/status`/`/api/waitlist/count` sin
+regresión, `POST /api/session/login/2fa` y `POST /api/account/2fa/enroll` responden `422`/`401`
+(no `404`) — confirma que las rutas nuevas están activas. La migración `V4__totp_status.sql` se
+aplicó sola al arrancar el binario nuevo, mismo mecanismo que toda migración anterior.
+
 ---
 
 Detalle completo de decisiones de diseño en `SPEC.md`, plan de trabajo con próximos pasos
