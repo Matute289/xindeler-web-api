@@ -77,22 +77,44 @@ cookie de sesión válida. Total del repo: 56 tests (32 unitarios + 24 de integr
 | ID | Tarea | Estado |
 |---|---|---|
 | D-01 | Env vars + proxy de Vite en `xindeler-web-landing` para desarrollo local real | `done` — `Matute289/xindeler-web-landing#41`. Las 5 llamadas same-origin (`waitlist`, `contribute`, `status`, `account/forgot-password`, `account/reset-password`) pasan de URL absoluta a ruta relativa `/api/...`; `vite.config.js` suma `server.proxy['/api']` con target configurable vía `VITE_API_PROXY_TARGET` (default: producción, mismo comportamiento de hoy) |
-| D-02 | `AuthModal.jsx` deja de descartar el resultado del login, primera versión de "hay alguien logueado" | `bloqueado` — ver hallazgo abajo, no se tocó esta pasada |
+| D-02 | `AuthModal.jsx` deja de descartar el resultado del login, primera versión de "hay alguien logueado" | `done` — ver detalle abajo |
 
-**Hallazgo D-02 (2026-08-15): `POST /api/session/login` no puede reemplazar a `${AUTH_API}/generate_token`
-en `AuthModal.jsx` tal como está hoy.** `session::login`'s `map_sign_in_error` (`server/src/session.rs`)
-colapsa tanto `Rejected(401)` como `Rejected(403)` de `xindeler-auth` al mismo
-`ApiError::InvalidCredentials` genérico, sin reenviar el body. Pero `AuthModal.jsx` depende
-específicamente del body de un `403` con `code: "EMAIL_VERIFICATION_REQUIRED"` (`completion_token`,
-`deadline`) para abrir el modal de cuentas legacy que piden verificar el email — sin ese body, el
-flujo de recuperación de cuentas legacy queda invisible detrás de un mensaje genérico de "credenciales
-inválidas". Migrar el login de `AuthModal` a este proxy tal cual está hoy rompería ese flujo en
-silencio. Antes de tocar `AuthModal.jsx`, `session::login`/`map_sign_in_error` necesitan una decisión
-de diseño explícita sobre cómo distinguir y reenviar ese caso (¿pasar el `code` + `completion_token`
-tal cual, sin envolver? ¿el modal legacy sigue pegándole directo a `auth.xindeler.com` para
-`account-email`/`resend-verification` aunque el login pase por acá?) — no es un cambio que convenga
-hacer sin que Matías lo revise, así que queda pendiente para la próxima sesión en vez de forzarlo
-ahora que no está para chequear el flujo en el browser.
+**D-02, resuelto (2026-08-15).** El hallazgo original (`POST /api/session/login` colapsaba el `403
+EMAIL_VERIFICATION_REQUIRED` de `xindeler-auth` a un error genérico, rompiendo el modal de cuentas
+legacy de `AuthModal.jsx` si se migraba el login sin arreglarlo primero) se resolvió sin cambiar el
+contrato público del endpoint para nadie más:
+
+- `authclient.rs::sign_in` inspecciona un `403` de `/generate_token`: si el body parsea como
+  `xindeler_auth_common::EmailVerificationRequiredResponse` **y** `code == "EMAIL_VERIFICATION_REQUIRED"`,
+  devuelve el nuevo `AuthClientError::EmailVerificationRequired(body)`; cualquier otro `403` (o un
+  body que no parsea) sigue siendo el `Rejected(403)` genérico de siempre.
+- `session::login` intercepta esa variante **antes** de `map_sign_in_error` y reenvía el body de
+  `xindeler-auth` tal cual, `403`, sin `Set-Cookie` — mismo shape (`code`, `message`, `deadline`,
+  `completion_token`) que `AuthModal.jsx` ya sabía parsear cuando le pegaba directo a
+  `auth.xindeler.com`, así que ese branch del frontend no necesitó cambiar una sola línea.
+- `map_sign_in_error` gana un brazo de exhaustividad para la nueva variante (nunca alcanzado en la
+  práctica, porque `login()` la intercepta primero) — igual en `map_account_error`/`map_recovery_error`
+  de `account.rs` (ninguno de esos cuatro proxies llama `sign_in`, así que tampoco es alcanzable ahí).
+- `account-email`/`resend-verification` (los dos requests que sigue haciendo el modal legacy después
+  de abrirse) **no** se proxearon — usan un bearer `completion_token` de un solo uso, no una sesión de
+  cookie, así que no hay ninguna revocación que este servicio necesite coordinar ahí (a diferencia de
+  `change_username`/`change_password`/`delete_account`). `AuthModal.jsx` los sigue llamando directo
+  contra `auth.xindeler.com`.
+- `AuthModal.jsx`: el login pasa de `POST ${AUTH_API}/generate_token` (descartaba el `AuthToken`) a
+  `POST /api/session/login`, mismo dominio que el resto del proxy, estableciendo una cookie de
+  sesión real en éxito en vez de tirar el resultado. El body cambia la clave `password` →
+  `password_prehash` para matchear `LoginPayload`. Todo el manejo de errores existente (401, 403
+  legacy, catch de red) queda igual — el 403 ahora sí trae el body real.
+- Deliberadamente fuera de alcance: ningún indicador de "sesión activa" nuevo en la UI (navbar,
+  avatar, botón de logout). Eso pertenece a la pantalla de cuenta (005), todavía sin diseñar —
+  inventar esa UI acá hubiera sido pisar una decisión de producto sin que Matías la vea primero.
+  Lo que sí queda resuelto es la parte de infraestructura: la sesión ahora se establece de verdad y
+  `GET /api/session/me` está listo para que 005/006 la consuman.
+
+Tests nuevos: `login_forwards_email_verification_required_verbatim_without_a_cookie` (403, sin
+cookie, `completion_token`/`deadline` intactos) y
+`login_treats_an_unparseable_403_body_as_generic_invalid_credentials` (un 403 sin ese shape sigue
+siendo el genérico de siempre). Total del repo: 58 tests (32 unitarios + 26 de integración).
 
 ---
 
