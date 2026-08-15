@@ -23,8 +23,19 @@ lettre = { version = "0.11.22", default-features = false, features = ["smtp-tran
 sha2 = "0.11"
 ipnet = "2"
 csv = "1"
+uuid = { version = "1", default-features = false, features = ["serde", "v4"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
+# Wire types only — never `xindeler-authc`, whose sign_in()/register()
+# helpers call net_prehash() internally on whatever they're given. This
+# service always receives an already-prehashed password from the frontend
+# and must never hash it a second time, so the payload structs are built by
+# hand against these types instead (see server/src/authclient.rs).
+#
+# Pin bumped deliberately when xindeler-auth ships something this repo
+# needs — same convention xindeler-new-horizon and xindeler-zuul use for
+# the same dependency.
+xindeler-auth-common = { package = "xindeler-auth-common", git = "ssh://git@github.com/Matute289/xindeler-auth.git", rev = "6d52fda725e34810a7124bf3e8cf2c63165114b1" }
 
 [dev-dependencies]
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
 serde_json = "1.0.60"
 rand = "0.10"

@@ -42,3 +42,17 @@ pub struct StatusResponse {
     /// `datetime.now(timezone.utc).isoformat()`.
     pub checked_at: String,
 }
+
+/// `password_prehash` is always the client-side prehash
+/// (`netPrehash()`/`net_prehash()`) — this service never sees a raw
+/// password and never recalculates this value, only forwards it.
+#[derive(Debug, Deserialize)]
+pub struct LoginPayload {
+    pub username: String,
+    pub password_prehash: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MeResponse {
+    pub username: String,
+}

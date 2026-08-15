@@ -26,3 +26,7 @@ wildcards = "allow"
 [sources]
 unknown-git = "deny"
 unknown-registry = "deny"
+# xindeler-auth-common (see server/Cargo.toml) — private repo, read-only
+# deploy key in CI. Explicitly allowlisted rather than disabling
+# unknown-git wholesale, so any *other* git dependency still fails closed.
+allow-git = ["ssh://git@github.com/Matute289/xindeler-auth.git"]

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod authclient;
 mod cache;
 mod config;
 mod db;
@@ -9,6 +10,7 @@ mod http;
 mod mailer;
 mod migrate_csv;
 mod ratelimit;
+mod session;
 mod state;
 mod waitlist;
 mod web;

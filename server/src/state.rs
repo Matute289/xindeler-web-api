@@ -1,3 +1,4 @@
+use crate::authclient::AuthClient;
 use crate::cache::TtlCache;
 use crate::config::AppConfig;
 use crate::ratelimit::RateLimiter;
@@ -11,6 +12,8 @@ pub struct AppState {
     pub count_cache: TtlCache<u64>,
     pub waitlist_requests: RateLimiter,
     pub contribute_requests: RateLimiter,
+    pub login_requests: RateLimiter,
+    pub auth_client: AuthClient,
 }
 
 impl AppState {
@@ -21,6 +24,8 @@ impl AppState {
             count_cache: TtlCache::new(COUNT_TTL),
             waitlist_requests: RateLimiter::with_limits(config.rate_limit_max, window),
             contribute_requests: RateLimiter::with_limits(config.rate_limit_max, window),
+            login_requests: RateLimiter::with_limits(config.rate_limit_max, window),
+            auth_client: AuthClient::new(&config.auth_public_url, config.auth_service_token()),
         }
     }
 }

@@ -47,14 +47,19 @@ backlog de `xindeler-web-landing`.
 puerto libre, DB temporal). Cubren: contrato de status codes (201/422/429), anti-enumeración en
 dedup, honeypot, CORS/privacy headers, rate limiting real, shutdown graceful ante SIGTERM.
 
-## Fase C — Sesión web autenticada (planeada)
+## Fase C — Sesión web autenticada (2026-08-15)
 
 | ID | Tarea | Estado |
 |---|---|---|
-| C-01 | Tabla `sessions` + `POST /api/session/login`, `/login/2fa`, `GET /me`, `POST /logout` | `todo` |
-| C-02 | Proxy autenticado `/api/account/*` hacia `xindeler-auth` vía `xindeler-authc` | `todo` |
+| C-01 | Tabla `sessions` + `POST /api/session/login`, `GET /me`, `POST /logout` | `done` — `/login/2fa` queda afuera hasta que Fase L de `xindeler-auth` (2FA) exista; `login()` ya deja el comentario de dónde entra ese branch. Cookie `HttpOnly`+`Secure`+`SameSite=Lax`, TTL 7 días absoluto |
+| C-02 | Proxy autenticado `/api/account/*` hacia `xindeler-auth` | `todo` — **decisión tomada**: HTTP propio vía `authclient.rs` (ya existe, `sign_in`/`verify`), nunca `xindeler-authc` (hashea internamente). Falta agregar `change_username`/`change_password`/`delete_account`/`check_username` al cliente y los handlers proxy |
 | C-03 | Reroute `ForgotPasswordPage`/`ResetPasswordPage` de `xindeler-web-landing` a través de acá | `todo` |
-| C-04 | Coordinar `AUTH_SERVICE_TOKEN` con `xindeler-auth` (reusar el del game server, o pedir credencial separada) | `todo` |
+| C-04 | Coordinar `AUTH_SERVICE_TOKEN` con `xindeler-auth` | `done` — se reusa el mismo secreto del game server (decisión confirmada, sin objeción). Deploy key de solo lectura (`AUTH_REPO_SSH_KEY`) agregado a `xindeler-auth` para que el CI de este repo (público) pueda fetchear `xindeler-auth-common` (privado) — mismo patrón que `xindeler-new-horizon`/`xindeler-zuul` |
+
+**Verificación de C-01:** 2 tests de integración nuevos (12 en total, los 10 de Fase B + estos)
+contra un `xindeler-auth` falso (servidor HTTP mínimo hecho a mano, sin dependencia nueva) —
+cubren login exitoso con cookie→`/me`→logout→`/me` 401, y credenciales inválidas sin setear
+cookie. Total del repo: 44 tests (32 unitarios + 12 de integración).
 
 ## Fase D — Frontend consume la sesión (planeada)
 

@@ -81,6 +81,17 @@ impl Request {
             .map(|(_, value)| value.as_str())
     }
 
+    /// Reads a single cookie by name out of the `Cookie` header. The browser
+    /// sends all cookies as one `name1=value1; name2=value2` header — this
+    /// does not decode percent-encoding, since every cookie this service
+    /// sets is an opaque hex token that never needs it.
+    pub fn cookie(&self, name: &str) -> Option<&str> {
+        self.header("Cookie")?.split(';').find_map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            (key.trim() == name).then(|| value.trim())
+        })
+    }
+
     #[allow(dead_code)]
     fn raw_query_string(&self) -> &str {
         match self.url.bytes().position(|byte| byte == b'?') {
@@ -256,6 +267,14 @@ mod tests {
 
         assert_eq!(request.header("AUTHORIZATION"), Some("Bearer first"));
         assert_eq!(request.header("missing"), None);
+    }
+
+    #[test]
+    fn cookie_finds_a_named_value_among_several() {
+        let request =
+            Request::fake("GET", "/").with_header("Cookie", "other=1; session=abc123; third=xyz");
+        assert_eq!(request.cookie("session"), Some("abc123"));
+        assert_eq!(request.cookie("missing"), None);
     }
 
     #[test]

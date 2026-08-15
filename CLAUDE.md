@@ -28,13 +28,27 @@ hasheado y lo reenvía tal cual a `xindeler-auth`, nunca lo recalcula ni lo vali
 ## Stack
 
 - **Rust** — mismo lenguaje que `xindeler-auth` y `xindeler-new-horizon`; cero precedente Go en
-  el ecosistema. Permite consumir `xindeler-authc` directamente como dependencia de Cargo en vez
-  de reimplementar el protocolo HTTP hacia `xindeler-auth`.
+  el ecosistema.
 - **axum + tokio**, handlers síncronos corridos en `spawn_blocking` — mismo patrón que
   `xindeler-auth` (ver su `server/src/http/axum.rs`): mantiene el trabajo bloqueante (SQLite,
   llamadas a `xindeler-auth`) fuera del reactor async sin escribir ningún handler como `async fn`.
-- **rusqlite + refinery** (Fase 1+) — SQLite sin pool, conexión por request, mismo patrón que
+- **rusqlite + refinery** — SQLite sin pool, conexión por request, mismo patrón que
   `xindeler-auth` (`journal_mode=WAL`, migraciones secuenciales embebidas).
+- **`xindeler-auth-common`** (git, repo privado) para los tipos de wire hacia `xindeler-auth` —
+  **nunca `xindeler-authc`**: sus `sign_in()`/`register()` calculan `net_prehash()` sobre lo que
+  reciben, y este servicio siempre recibe el `password_prehash` ya calculado por el frontend.
+  Usarlo hashearía dos veces y rompería todos los logins. Ver `server/src/authclient.rs`.
+
+## Dependencia privada — `xindeler-auth-common`
+
+Vive en `Matute289/xindeler-auth` (privado); este repo es público. Mismo patrón que
+`xindeler-new-horizon`/`xindeler-zuul` para la misma dependencia:
+- `.cargo/config.toml` fuerza `git-fetch-with-cli` (el cliente SSH propio de Cargo falla
+  ssh-agent en algunos entornos).
+- CI usa un deploy key de **solo lectura** (`AUTH_REPO_SSH_KEY`, secret de este repo) agregado a
+  `xindeler-auth` — nunca push access.
+- El `rev` en `server/Cargo.toml` se bumpea a mano cuando `xindeler-auth` publica algo que hace
+  falta — nunca sigue `main` automáticamente.
 
 ## Estructura de crates
 
@@ -47,15 +61,24 @@ server/   → el binario
     error.rs                → ApiError interno + status_code() + public_fields() → {code, message, request_id}
     config.rs               → OnceLock<AppConfig>, from_iter, validación de rangos
     state.rs
+    db.rs                    → conexión SQLite + migraciones refinery
+    cache.rs                 → TtlCache genérico (status/count)
+    ratelimit.rs              → RateLimiter con TTL real, por IP
+    waitlist.rs               → lógica de waitlist/contribute/status/count
+    mailer.rs                 → SMTP, templates HTML escapados
+    digest.rs                 → subcomando CLI, digest mensual
+    migrate_csv.rs             → subcomando CLI, migración one-shot CSV→SQLite
+    authclient.rs              → cliente HTTP propio hacia xindeler-auth (NO xindeler-authc)
+    session.rs                 → login/logout/me
 ```
 
 ## Esquema de base de datos
 
-- **Fase 0** (actual): ninguna — el binario solo responde `/ping`.
 - **Fase 1**: `waitlist`, `contributors` (migradas desde los CSV del Python actual — 7 filas
   totales).
-- **Fase 2**: `sessions` (`session_id`, `uuid`, `username`, `created_at`, `expires_at`,
-  `revoked_at`).
+- **Fase 2**: `sessions` (`session_id` = `SHA-256(cookie)`, `uuid`, `username`, `created_at`,
+  `expires_at`, `revoked_at`) — índice por `uuid` para poder revocar todas las sesiones de una
+  cuenta en el mismo request que un cambio de contraseña (hallazgo 8 de la tarea 007).
 
 ## API Endpoints
 
@@ -65,19 +88,16 @@ el body de la respuesta.
 
 ## Variables de entorno
 
-| Variable | Default | Fase |
-|---|---|---|
-| `WEB_API_BIND_ADDR` | `127.0.0.1:8020` | 0 |
-| `WEB_API_HTTP_WORKERS` | `16` | 0 |
-| `RUST_LOG` | *(sin logs)* | 0 |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `FROM_NAME` | — | 1 |
-| `AUTH_SERVICE_TOKEN` | — | 2 (mismo secreto que ya usa el game server contra `xindeler-auth`) |
+Ver tabla completa en `README.md`. Resumen por fase: bind/workers (0), DB/game-server/rate-limit/
+digest (1), SMTP/OWNER_EMAIL opcionales (1), `AUTH_PUBLIC_URL`/`AUTH_SERVICE_TOKEN` (2 — el
+segundo es el mismo secreto que ya usa el game server contra `xindeler-auth`, `/verify`).
 
 ## Seguridad — notas críticas
 
 - Ninguna llamada mutable a `xindeler-auth` (`change_username`, `change_password`,
-  `delete_account`, `2fa/*`) se hace directo desde el frontend — todas pasan por proxy acá,
-  autenticadas por la cookie de sesión.
+  `delete_account`, `2fa/*`) se debe hacer nunca directo desde el frontend — pasan por proxy acá,
+  autenticadas por la cookie de sesión. **Pendiente de implementar** (no confundir con hecho): los
+  endpoints `/api/account/*` todavía no existen, solo `/api/session/{login,logout,me}`.
 - Cookie de sesión: `HttpOnly` + `Secure` + `SameSite=Lax`. Nunca en `localStorage` ni legible
   desde JS.
 - CORS: allowlist exacta de origins (`https://xindeler.com`, `https://www.xindeler.com`, más los

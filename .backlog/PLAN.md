@@ -38,10 +38,28 @@
 - Deploy en puerto nuevo, smoke-test directo, corte de `proxy_pass` en nginx, apagar
   `xindeler-waitlist.service` — bloqueado a propósito hasta que Matías confirme explícitamente
 
-### Fase 2 — Sesión web
+✅ **Fase 2 — Sesión web (C-01)** (esta pasada)
+- Tabla `sessions` (`session_id` = SHA-256 del cookie crudo, índice por `uuid`)
+- `POST /api/session/login`, `GET /api/session/me`, `POST /api/session/logout`
+- `authclient.rs`: cliente HTTP propio hacia `xindeler-auth` — **decisión de arquitectura
+  importante**: depende de `xindeler-auth-common` (solo tipos de wire, git a repo privado), nunca
+  de `xindeler-authc`. Ese crate calcula `net_prehash()` internamente en `sign_in()`/`register()`;
+  como este servicio ya recibe el `password_prehash` calculado por el frontend, usar `authc`
+  hubiera hasheado dos veces y roto todos los logins. Se detectó leyendo el código fuente real de
+  `authc`, no por documentación.
+- Dependencia privada resuelta con el mismo patrón que `xindeler-new-horizon`/`xindeler-zuul`:
+  deploy key de solo lectura (`AUTH_REPO_SSH_KEY`) + `.cargo/config.toml` con
+  `git-fetch-with-cli` (el SSH propio de Cargo falla ssh-agent en algunos entornos)
+- Cookie `HttpOnly`+`Secure`+`SameSite=Lax`, TTL 7 días absoluto, sin renovación deslizante
+- 44 tests en verde (32 unitarios + 12 de integración, incluidos 2 nuevos contra un
+  `xindeler-auth` falso hecho a mano)
 
-Tabla `sessions`, endpoints `/api/session/*` y `/api/account/*` proxeando a `xindeler-auth` vía
-`xindeler-authc`, reroute de `ForgotPasswordPage`/`ResetPasswordPage` del frontend.
+**Pendiente de Fase 2 — no se hizo esta pasada:**
+- C-02: proxy `/api/account/*` (`change_username`, `change_password`, `delete_account`,
+  `check_username`) — `authclient.rs` ya tiene la base, falta agregar estos métodos y los
+  handlers
+- C-03: reroute de `ForgotPasswordPage`/`ResetPasswordPage` de `xindeler-web-landing`
+- `/api/session/login/2fa` — bloqueado hasta que Fase L (2FA) de `xindeler-auth` exista
 
 ### Fase 3 — Frontend consume la sesión
 
@@ -50,7 +68,8 @@ resultado del login. Base concreta para 005 (pantalla de cuenta) y 006 (personaj
 
 ## Orden de prioridad actual
 
-1. Fase 1 (paridad funcional) — bloquea el corte de producción, sin ella no hay nada que ganar
-   con este repo todavía.
-2. Fase 2 (sesión) — el objetivo real de todo esto, desbloquea 005/006 en `xindeler-web-landing`.
+1. Fase 1 B-05 (corte de producción) — bloqueado a propósito hasta confirmación explícita de
+   Matías, toca datos reales de usuarios.
+2. Fase 2 C-02/C-03 (proxy de cuenta + reroute) — completa lo que hace falta para que 005/006 de
+   `xindeler-web-landing` tengan de verdad todo lo que necesitan.
 3. Fase 3 (frontend) — cierra el círculo.

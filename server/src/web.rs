@@ -1,6 +1,7 @@
 use crate::config::NetworkConfig;
 use crate::error::{self, ApiError};
 use crate::http::{serve, BodyError, Request, Response};
+use crate::session;
 use crate::state::AppState;
 use crate::waitlist;
 use log::*;
@@ -87,8 +88,13 @@ fn dispatch(request: &Request, state: &AppState, network: &NetworkConfig) -> Res
         ("POST", "/api/contribute") => take_request_data(request)
             .and_then(|body| waitlist::join_contribute(body, remote_ip, state))
             .unwrap_or_else(error::response),
-        // Fase 2 adds: POST /api/session/*, GET /api/session/me,
-        // POST /api/account/*.
+        ("POST", "/api/session/login") => take_request_data(request)
+            .and_then(|body| session::login(body, remote_ip, state))
+            .unwrap_or_else(error::response),
+        ("GET", "/api/session/me") => session::me(request).unwrap_or_else(error::response),
+        ("POST", "/api/session/logout") => session::logout(request).unwrap_or_else(error::response),
+        // Fase 2 also adds: POST /api/account/* (proxy autenticado a
+        // xindeler-auth), reroute de forgot/reset-password.
         _ => Response::empty_404(),
     };
 

@@ -19,6 +19,18 @@ observable de cara al frontend, pero compilado, versionado, con CI y tests de in
   2FA). Este servicio nunca guarda contraseñas ni las valida — reenvía el `password_prehash` que
   ya calcula el frontend (`netPrehash`, wire-compatible con `net_prehash()` de `xindeler-auth`)
   tal cual, como string opaco.
+- Depende de `xindeler-auth-common` (tipos de wire, no lógica) vía git — **nunca** de
+  `xindeler-authc`, cuyos `sign_in()`/`register()` hashean lo que reciben, y este servicio ya
+  recibe el `password_prehash` calculado. Ver `server/src/authclient.rs`.
+
+## Prerrequisito: acceso al repo privado `xindeler-auth`
+
+`xindeler-auth-common` vive en `Matute289/xindeler-auth` (privado). Para compilar local hace
+falta una clave SSH con acceso de lectura a ese repo (la tuya, si sos colaborador). El CI usa un
+deploy key de solo lectura dedicado (`AUTH_REPO_SSH_KEY`, secret del repo) — mismo patrón que
+`xindeler-new-horizon` y `xindeler-zuul` para la misma dependencia. `.cargo/config.toml` fuerza
+`git-fetch-with-cli` porque el cliente SSH propio de Cargo falla la autenticación por ssh-agent en
+algunos entornos.
 
 ## Desarrollo
 
@@ -46,9 +58,9 @@ WEB_API_BIND_ADDR=127.0.0.1:8020 cargo run -p xindeler-web-api-server
 | `WEB_API_DIGEST_STATE_PATH` | `/opt/xindeler-web-api/data/digest-last-sent.txt` | Marca de agua del digest mensual |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` | — (opcional) | Sin configurar, el envío de mail no-opea en silencio |
 | `OWNER_EMAIL` | — (opcional) | Destinatario de notificaciones de contribuidores + digest mensual |
+| `AUTH_PUBLIC_URL` | `https://auth.xindeler.com` | Base URL de `xindeler-auth` para `/api/session/login` |
+| `AUTH_SERVICE_TOKEN` | — (opcional*) | Mismo secreto de servicio que ya usa el game server contra `xindeler-auth` (`/verify`). *Requerido en la práctica para que el login funcione — sin él, `/api/session/login` responde 500 |
 | `RUST_LOG` | *(sin logs)* | Nivel de log (`env_logger`), ej. `info` |
-
-Fase 2 agrega `AUTH_SERVICE_TOKEN` para hablar con `xindeler-auth`.
 
 ## Endpoints
 
@@ -59,8 +71,10 @@ Fase 2 agrega `AUTH_SERVICE_TOKEN` para hablar con `xindeler-auth`.
 | `GET` | `/api/waitlist/count` | ✅ Fase 1 |
 | `POST` | `/api/waitlist` | ✅ Fase 1 |
 | `POST` | `/api/contribute` | ✅ Fase 1 |
-| `POST` | `/api/session/login`, `/logout`, `GET /me` | ⏳ Fase 2 |
-| `POST` | `/api/account/*` (proxy autenticado a `xindeler-auth`) | ⏳ Fase 2 |
+| `POST` | `/api/session/login` | ✅ Fase 2 |
+| `GET` | `/api/session/me` | ✅ Fase 2 |
+| `POST` | `/api/session/logout` | ✅ Fase 2 |
+| `POST` | `/api/account/*` (proxy autenticado a `xindeler-auth`) | ⏳ Fase 2 (pendiente: change-username/change-password/delete + reroute forgot/reset-password) |
 
 ## Subcomandos CLI
 

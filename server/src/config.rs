@@ -70,6 +70,19 @@ pub struct AppConfig {
     pub owner_email: Option<String>,
     pub network: NetworkConfig,
     pub digest_state_path: PathBuf,
+    pub auth_public_url: String,
+    /// Same shared secret the game server already uses against
+    /// `xindeler-auth`'s `/verify` — see the "Coordinación cross-repo"
+    /// section of the Fase 0 plan for why this repo doesn't mint its own.
+    /// Optional so Fase 1-only local dev doesn't need a real one; session
+    /// login fails closed with an internal error if it's unset.
+    auth_service_token: Option<String>,
+}
+
+impl AppConfig {
+    pub fn auth_service_token(&self) -> Option<&str> {
+        self.auth_service_token.as_deref()
+    }
 }
 
 impl AppConfig {
@@ -172,6 +185,13 @@ impl AppConfig {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
+        let auth_service_token = match values.get("AUTH_SERVICE_TOKEN") {
+            Some(token) if token.len() < 32 => {
+                return Err("AUTH_SERVICE_TOKEN must contain at least 32 bytes".into())
+            }
+            other => other.cloned(),
+        };
+
         Ok(Self {
             bind_addr,
             http_workers,
@@ -186,6 +206,11 @@ impl AppConfig {
                 .get("WEB_API_DIGEST_STATE_PATH")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from(DEFAULT_DIGEST_STATE_PATH)),
+            auth_public_url: values
+                .get("AUTH_PUBLIC_URL")
+                .cloned()
+                .unwrap_or_else(|| "https://auth.xindeler.com".to_owned()),
+            auth_service_token,
         })
     }
 }
@@ -204,6 +229,11 @@ impl std::fmt::Debug for AppConfig {
             .field(
                 "owner_email",
                 &self.owner_email.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("auth_public_url", &self.auth_public_url)
+            .field(
+                "auth_service_token",
+                &self.auth_service_token.as_ref().map(|_| "[REDACTED]"),
             )
             .finish()
     }
@@ -237,6 +267,34 @@ mod tests {
         assert_eq!(config.rate_limit_max, 3);
         assert_eq!(config.rate_limit_window_secs, 3600);
         assert!(config.smtp.is_none());
+        assert_eq!(config.auth_public_url, "https://auth.xindeler.com");
+        assert!(config.auth_service_token().is_none());
+    }
+
+    #[test]
+    fn auth_service_token_requires_at_least_32_bytes() {
+        assert!(AppConfig::from_iter(vec![("AUTH_SERVICE_TOKEN", "too-short")]).is_err());
+
+        let config = AppConfig::from_iter(vec![(
+            "AUTH_SERVICE_TOKEN",
+            "0123456789abcdef0123456789abcdef",
+        )])
+        .unwrap();
+        assert_eq!(
+            config.auth_service_token(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
+    }
+
+    #[test]
+    fn configuration_debug_output_redacts_auth_service_token() {
+        let config = AppConfig::from_iter(vec![(
+            "AUTH_SERVICE_TOKEN",
+            "0123456789abcdef0123456789abcdef",
+        )])
+        .unwrap();
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("0123456789abcdef0123456789abcdef"));
     }
 
     #[test]
