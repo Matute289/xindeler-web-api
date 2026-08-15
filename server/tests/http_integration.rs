@@ -421,6 +421,48 @@ fn invalid_credentials_return_401_without_setting_a_cookie() {
     assert_eq!(body_json(response)["code"], "INVALID_CREDENTIALS");
 }
 
+#[test]
+fn login_forwards_email_verification_required_verbatim_without_a_cookie() {
+    let auth = FakeAuthServer::start(&[(
+        "/generate_token",
+        403,
+        r#"{"code":"EMAIL_VERIFICATION_REQUIRED","message":"Email verification is required before login.","deadline":1999999999,"completion_token":"legacy-completion-token"}"#,
+    )]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/session/login"))
+        .json(&json!({"username": "legacyuser", "password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 403);
+    assert!(response.headers().get("set-cookie").is_none());
+    let body = body_json(response);
+    assert_eq!(body["code"], "EMAIL_VERIFICATION_REQUIRED");
+    assert_eq!(body["completion_token"], "legacy-completion-token");
+    assert_eq!(body["deadline"], 1999999999);
+}
+
+#[test]
+fn login_treats_an_unparseable_403_body_as_generic_invalid_credentials() {
+    let auth = FakeAuthServer::start(&[("/generate_token", 403, "not json")]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/session/login"))
+        .json(&json!({"username": "tester", "password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 401);
+    assert_eq!(body_json(response)["code"], "INVALID_CREDENTIALS");
+}
+
 // --- C-02: /api/account/* proxy tests ---
 
 #[test]

@@ -12,8 +12,8 @@ use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use std::time::Duration;
 use xindeler_auth_common::{
     AuthToken, ChangePasswordPayload, ChangeUsernamePayload, DeleteAccountPayload,
-    ForgotPasswordPayload, ResetPasswordPayload, SignInPayload, SignInResponse,
-    UsernameAvailabilityResponse, ValidityCheckPayload, ValidityCheckResponse,
+    EmailVerificationRequiredResponse, ForgotPasswordPayload, ResetPasswordPayload, SignInPayload,
+    SignInResponse, UsernameAvailabilityResponse, ValidityCheckPayload, ValidityCheckResponse,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -25,6 +25,14 @@ pub enum AuthClientError {
     /// the status code — callers map it to their own public error code
     /// without echoing xindeler-auth's response body to the client.
     Rejected(u16),
+    /// `sign_in()` specifically: xindeler-auth rejected the login with a
+    /// `403 EMAIL_VERIFICATION_REQUIRED` — a legacy pre-2FA account that
+    /// still needs to confirm an email before it can log in. Unlike other
+    /// rejections, this one *is* forwarded to the client verbatim (session
+    /// login is the only caller that unwraps this variant instead of
+    /// collapsing it via `map_sign_in_error`), because the frontend's legacy
+    /// recovery modal needs `completion_token`/`deadline` to keep working.
+    EmailVerificationRequired(EmailVerificationRequiredResponse),
     Request(reqwest::Error),
     /// `verify()` was called but this service has no `AUTH_SERVICE_TOKEN`
     /// configured — a deployment problem, not a client input problem.
@@ -74,8 +82,21 @@ impl AuthClient {
             .post(format!("{}/generate_token", self.base_url))
             .json(&payload)
             .send()?;
-        if !response.status().is_success() {
-            return Err(AuthClientError::Rejected(response.status().as_u16()));
+        let status = response.status();
+        if !status.is_success() {
+            // 403 is the one rejection worth inspecting: it's the only
+            // status xindeler-auth uses for EMAIL_VERIFICATION_REQUIRED, and
+            // any other shape on a 403 (or a body that fails to parse) just
+            // falls through to the generic Rejected(403) every other
+            // rejection gets.
+            if status.as_u16() == 403 {
+                if let Ok(body) = response.json::<EmailVerificationRequiredResponse>() {
+                    if body.code == "EMAIL_VERIFICATION_REQUIRED" {
+                        return Err(AuthClientError::EmailVerificationRequired(body));
+                    }
+                }
+            }
+            return Err(AuthClientError::Rejected(status.as_u16()));
         }
         Ok(response.json::<SignInResponse>()?.token)
     }

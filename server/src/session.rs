@@ -107,6 +107,12 @@ fn map_sign_in_error(err: AuthClientError) -> ApiError {
             log::error!("AUTH_SERVICE_TOKEN is not configured — session login cannot work");
             ApiError::InternalServerError
         }
+        // login() unwraps this variant before ever calling map_sign_in_error
+        // (see above); verify() never produces it (different endpoint). Kept
+        // here only so the match stays exhaustive if a future caller forgets
+        // to special-case it — falls back to the same generic 401 as any
+        // other rejected credential.
+        AuthClientError::EmailVerificationRequired(_) => ApiError::InvalidCredentials,
     }
 }
 
@@ -128,10 +134,19 @@ pub fn login(body: &[u8], remote_ip: IpAddr, state: &AppState) -> Result<Respons
     // session — see hallazgo 2 of backlog 007 (the session can only start
     // after the second factor is confirmed, or a present-but-2FA-off cookie
     // would itself leak that the account has no 2FA).
-    let auth_token = state
+    let auth_token = match state
         .auth_client
         .sign_in(&payload.username, &payload.password_prehash)
-        .map_err(map_sign_in_error)?;
+    {
+        Ok(token) => token,
+        // Forwarded verbatim, not through the generic error envelope — the
+        // frontend's legacy account-recovery modal needs the exact
+        // completion_token/deadline shape xindeler-auth already returns.
+        Err(AuthClientError::EmailVerificationRequired(body)) => {
+            return Ok(Response::json(&body).with_status_code(403));
+        }
+        Err(err) => return Err(map_sign_in_error(err)),
+    };
 
     let verified = state
         .auth_client

@@ -35,6 +35,10 @@ fn map_account_error(err: AuthClientError) -> ApiError {
             log::error!("account proxy hit MissingServiceToken unexpectedly");
             ApiError::InternalServerError
         }
+        // Only sign_in() ever produces this variant (see authclient.rs) —
+        // none of the four calls this maps errors for call sign_in.
+        // Unreachable in practice, kept for exhaustiveness.
+        AuthClientError::EmailVerificationRequired(_) => ApiError::InvalidCredentials,
     }
 }
 
@@ -59,6 +63,11 @@ fn map_recovery_error(err: AuthClientError) -> ApiError {
         AuthClientError::MissingServiceToken => {
             log::error!("account proxy hit MissingServiceToken unexpectedly");
             ApiError::InternalServerError
+        }
+        // forgot_password/reset_password never call sign_in() either — see
+        // map_account_error above for the same note.
+        AuthClientError::EmailVerificationRequired(_) => {
+            ApiError::InvalidRequest("xindeler-auth rejected the request".into())
         }
     }
 }
