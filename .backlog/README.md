@@ -19,6 +19,8 @@ backlog de `xindeler-web-landing`.
 | P1 — Paridad | Reemplazar el Python sin cambiar comportamiento observable | Fase B | Fase A `done` — **Fase B deployada y verificada en producción real (2026-08-15)** |
 | P2 — Producto | Sesión web autenticada | Fase C | Fase B `done` |
 | P3 — Cierre | Frontend consume la sesión | Fase D | Fase C `done` — **`done`, ver detalle abajo** |
+| — | Proxy de 2FA/TOTP para la pantalla de cuenta | Fase E | `done` (2026-08-15), en producción |
+| P2 — Producto | Proxy de personajes (`xindeler-new-horizon` NH-79) | Fase F | Diseño listo, sin implementar — bloqueado en que `xindeler-auth` y `xindeler-new-horizon` también tengan sus specs/plans/tasks mergeados (pedido de Matías, 2026-08-16) |
 
 ## Fase A — Repo, fundaciones y hardening (2026-08-14)
 
@@ -219,6 +221,58 @@ Verificado end-to-end contra `https://xindeler.com` real: `/api/status`/`/api/wa
 regresión, `POST /api/session/login/2fa` y `POST /api/account/2fa/enroll` responden `422`/`401`
 (no `404`) — confirma que las rutas nuevas están activas. La migración `V4__totp_status.sql` se
 aplicó sola al arrancar el binario nuevo, mismo mecanismo que toda migración anterior.
+
+## Fase F — Proxy de personajes para la pantalla de cuenta (`xindeler-new-horizon` NH-79, 2026-08-16)
+
+Relayado desde `xindeler-new-horizon` NH-79 (worksheet §10 resuelto por Matías 2026-08-16) y
+`xindeler-auth` Fase N (diseño del token acotado, PR #38 de ese repo). Este repo es el gateway
+público elegido en NH-79 §10 [Q2] — mismo criterio de siempre: nada mutable ni server-to-server se
+llama directo desde el frontend, todo pasa por acá.
+
+**Flujo de tres saltos, distinto del que ya usa `verify()`:**
+1. La landing ya está logueada acá (sesión propia, `resolve_session`).
+2. Este servicio pide a `xindeler-auth` un `CharacterAccessToken` acotado para el `uuid` de la
+   sesión — **credencial nueva, `WEB_API_SERVICE_TOKEN`, nunca `AUTH_SERVICE_TOKEN`** (esa sigue
+   siendo exclusiva de `verify()`/`username_to_uuid`/`uuid_to_username`; `xindeler-auth` la rechaza
+   explícitamente para este endpoint nuevo — ver Fase N de ese repo, la asimetría es la garantía
+   central del diseño ahí).
+3. Este servicio reenvía ese token al game server (nuevo endpoint loopback, NH-79 spec §4/§9 de
+   ese repo), que lo canjea contra `xindeler-auth` usando **su propia** credencial existente
+   (`AUTH_SERVICE_TOKEN`, la que ya tiene para `/verify`) — este servicio nunca habla directo con
+   el game server con una credencial de *login*, solo reenvía el token acotado ya emitido.
+
+- `authclient.rs` suma `character_service_token: Option<String>` (segundo campo en `AuthClient`,
+  mismo patrón `Option`+validación de `service_token`) y
+  `issue_character_access_token(uuid) -> Result<CharacterAccessToken, AuthClientError>` — mismo
+  shape que `verify()` (`.bearer_auth(character_service_token)`, mapea `RejectedWithBody`) pero
+  contra `POST /issue-character-access-token` y con el bearer nuevo, no el existente.
+- **Nuevo cliente, `game_server_client.rs`** (no reusa `AuthClient` — habla con un servicio
+  distinto, con su propio contrato, no con `xindeler-auth`): `list_characters(token) ->
+  Result<Vec<CharacterSummary>, GameServerClientError>` (`GET
+  /player_api/v1/characters`, `Authorization: Bearer <CharacterAccessToken>`) y
+  `rename_character(token, character_id, new_alias) -> Result<(), GameServerClientError>` (`POST
+  /player_api/v1/characters/{id}/rename`, mismo bearer). Nueva config `GAME_SERVER_URL` (default
+  `http://127.0.0.1:<player_api_port>`, puerto exacto a confirmar contra el plan real de NH-79 en
+  `xindeler-new-horizon`).
+- **Nuevos handlers en `account.rs`**: `list_characters(request, state)` y
+  `rename_character(body, request, state)` — mismo patrón que `totp_enroll`: `resolve_session`,
+  pedir el `CharacterAccessToken` fresco (uno nuevo **por llamada**, nunca cacheado ni reusado
+  entre acciones — TTL 60s de un solo uso, spec de Fase N de `xindeler-auth`), reenviar al game
+  server, mapear errores.
+- Rutas nuevas: `GET /api/account/characters`, `POST
+  /api/account/characters/{character_id}/rename`.
+- **Riesgo operacional, no de diseño, sin confirmar todavía**: el `web_address` del game server es
+  loopback-only por decisión explícita de `xindeler-new-horizon` (NH-75, "nunca debe bindear a
+  nada que no sea loopback") — esto solo funciona sin túnel/VPN si este servicio y el game server
+  terminan corriendo en el **mismo host**. El game server todavía no está deployado
+  (`CLAUDE.md` de `xindeler-web-landing`: "el servidor aún no está deployado"), así que esta
+  topología no está decidida — flagged para confirmar con Matías antes del deploy real de esta
+  fase, no algo que este documento pueda asumir.
+
+**Estado:** diseño listo, sin implementar. **No dispatchable todavía** — mismo pedido de Matías
+(2026-08-16) que en los otros dos repos: spec+plan+tasks mergeados en los tres
+(`xindeler-new-horizon`, `xindeler-auth`, este) antes de que arranque cualquier implementación en
+cualquiera de los tres; el orden real de dispatch lo definió él: `xindeler-new-horizon` primero.
 
 ---
 
