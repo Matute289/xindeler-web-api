@@ -1,5 +1,21 @@
 # Plan — xindeler-web-api
 
+## Estado actualizado al 2026-08-16 — Fase F diseñada, sin implementar
+
+Fase E (proxy de 2FA) cerrada y en producción desde 2026-08-15 (ver `.backlog/README.md`). Nueva
+**Fase F — proxy de personajes** (relayada desde `xindeler-new-horizon` NH-79, worksheet resuelto
+2026-08-16): diseño completo en `.backlog/README.md`, **sin implementar**. Bloqueada por pedido
+explícito de Matías, no por nada técnico — spec+plan+tasks tienen que estar mergeados en los tres
+repos involucrados (este, `xindeler-auth` PR #38, `xindeler-new-horizon`) antes de que arranque
+cualquier implementación en cualquiera de los tres. Orden real de dispatch cuando llegue ese
+momento: `xindeler-new-horizon` primero, este repo después (depende del token acotado que
+`xindeler-auth` Fase N todavía no implementó tampoco).
+
+**Riesgo a resolver antes de implementar, no solo de diseño**: la topología real de red entre este
+servicio y el game server (loopback-only por decisión de NH-75 en ese repo) no está confirmada — el
+game server todavía no está deployado en ningún lado. Confirmar con Matías si van a compartir host
+antes de escribir el cliente HTTP nuevo hacia ese servicio.
+
 ## Estado actualizado al 2026-08-15 — backlog 007 completo, en producción
 
 Las cuatro fases están cerradas y el corte de producción real ya se ejecutó: `xindeler-web-api`
