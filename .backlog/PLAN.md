@@ -65,6 +65,18 @@ el game server al arrancar) era ajeno a esta Fase F, ya se arregló en
 Único pendiente real: decidir la topología de deploy (`xindeler-new-horizon` todavía no está
 deployado en ningún lado).
 
+**Actualización 2026-08-20 (más tarde el mismo día) — topología resuelta.** `xindeler-new-horizon`
+ya no está sin deployar: una verificación de infraestructura confirmó `xindeler-server-cli`
+corriendo en el mismo VPS que este servicio — `0.0.0.0:14004` (protocolo del juego, público) y
+`127.0.0.1:14005` (`player_api/v1`, loopback como exige NH-75). Mismo host, loopback intacto: el
+riesgo de topología de la línea 26-29 queda cerrado. `xindeler-new-horizon` también mergeó su
+primer deploy script (BL-83, [PR #203](https://github.com/Matute289/xindeler-new-horizon/pull/203),
+modelado en el `deploy/deploy.sh` de este repo) — pero, según ese mismo PR, todavía no se corrió
+contra producción, y el proceso visto en el VPS corre como background process suelto, no vía
+systemd todavía. Qué revisión de `development` tiene el binario que está realmente corriendo (y si
+ya incluye NH-79) no se pudo confirmar en esta pasada — no asumir que el feature ya funciona de
+punta a punta en producción sin volver a chequear `xindeler-new-horizon`'s BL-83.
+
 ## Estado actualizado al 2026-08-15 — backlog 007 completo, en producción
 
 Las cuatro fases están cerradas y el corte de producción real ya se ejecutó: `xindeler-web-api`
