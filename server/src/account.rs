@@ -7,14 +7,17 @@
 
 use crate::authclient::{should_forward_verbatim, AuthClientError};
 use crate::error::{self, ApiError};
+use crate::game_server_client::GameServerClientError;
 use crate::http::{Request, Response};
 use crate::session::{clear_cookie, resolve_session, revoke_all_sessions};
 use crate::state::AppState;
 use crate::totp_status;
+use uuid::Uuid;
 use xindeler_web_api_common::{
-    AvailabilityResponse, ChangePasswordRequest, ChangeUsernameRequest, DeleteAccountRequest,
-    ForgotPasswordRequest, OkResponse, ResetPasswordRequest, TotpBackupCodesResponse,
-    TotpCodeRequest, TotpEnrollRequest, TotpEnrollResponse,
+    AvailabilityResponse, ChangePasswordRequest, ChangeUsernameRequest, CharactersResponse,
+    DeleteAccountRequest, ForgotPasswordRequest, OkResponse, RenameCharacterRequest,
+    ResetPasswordRequest, TotpBackupCodesResponse, TotpCodeRequest, TotpEnrollRequest,
+    TotpEnrollResponse,
 };
 
 fn map_account_error(err: AuthClientError) -> ApiError {
@@ -35,6 +38,13 @@ fn map_account_error(err: AuthClientError) -> ApiError {
             // None of the calls in this module use the service token (see
             // authclient.rs) — reachable only if that ever changes.
             log::error!("account proxy hit MissingServiceToken unexpectedly");
+            ApiError::InternalServerError
+        }
+        // Only issue_character_access_token() ever produces this variant
+        // (see authclient.rs) — none of the calls this maps errors for call
+        // it. Unreachable in practice, kept for exhaustiveness.
+        AuthClientError::MissingCharacterServiceToken => {
+            log::error!("account proxy hit MissingCharacterServiceToken unexpectedly");
             ApiError::InternalServerError
         }
         // Only sign_in()/totp_login() ever produce this variant (see
@@ -64,6 +74,10 @@ fn map_recovery_error(err: AuthClientError) -> ApiError {
         }
         AuthClientError::MissingServiceToken => {
             log::error!("account proxy hit MissingServiceToken unexpectedly");
+            ApiError::InternalServerError
+        }
+        AuthClientError::MissingCharacterServiceToken => {
+            log::error!("account proxy hit MissingCharacterServiceToken unexpectedly");
             ApiError::InternalServerError
         }
         // forgot_password/reset_password never call sign_in()/totp_login()
@@ -346,5 +360,122 @@ pub fn totp_regenerate_backup_codes(
     ) {
         Ok(backup_codes) => Ok(Response::json(&TotpBackupCodesResponse { backup_codes })),
         Err(err) => map_or_forward(err, map_account_error),
+    }
+}
+
+// --- Fase F (NH-79): character-list/rename proxy. Both require an active
+// session. `identity.uuid` is what actually authorizes the call against the
+// game server -- via a freshly-minted, one-shot `CharacterAccessToken` --
+// never anything the client supplies. ---
+
+/// A live session's `uuid` (from `sessions.uuid`, itself set once from
+/// xindeler-auth's own resolved `Uuid` in `session::create_session`) that
+/// fails to parse back into a `Uuid` is a data-integrity bug, not a client
+/// input problem -- never reachable through normal operation.
+fn session_uuid(identity_uuid: &str) -> Result<Uuid, ApiError> {
+    Uuid::parse_str(identity_uuid).map_err(|_| {
+        log::error!("session uuid failed to parse as a Uuid: {identity_uuid}");
+        ApiError::InternalServerError
+    })
+}
+
+fn map_character_token_error(err: AuthClientError) -> ApiError {
+    match err {
+        // xindeler-auth's UserDoesNotExist -- the session's own uuid no
+        // longer names a real account (e.g. deleted moments after this
+        // session was created). Force a relogin rather than a raw 500.
+        AuthClientError::RejectedWithBody { code, .. } if code == "USER_NOT_FOUND" => {
+            ApiError::Unauthorized
+        }
+        AuthClientError::RejectedWithBody { status: 429, .. } => ApiError::RateLimit,
+        AuthClientError::RejectedWithBody { status, code, .. } => {
+            log::warn!("xindeler-auth answered with unexpected status {status} (code={code})");
+            ApiError::UpstreamAuthError
+        }
+        AuthClientError::Request(err) => {
+            log::warn!("request to xindeler-auth failed: {err}");
+            ApiError::UpstreamAuthError
+        }
+        AuthClientError::MissingCharacterServiceToken => {
+            log::error!("WEB_API_SERVICE_TOKEN is not configured — character proxy cannot work");
+            ApiError::InternalServerError
+        }
+        // Only issue_character_access_token() is ever mapped through this
+        // function -- verify()/sign_in()/totp_login() never produce these
+        // two. Unreachable in practice, kept for exhaustiveness.
+        AuthClientError::MissingServiceToken => {
+            log::error!("character proxy hit MissingServiceToken unexpectedly");
+            ApiError::InternalServerError
+        }
+        AuthClientError::EmailVerificationRequired(_) => ApiError::InternalServerError,
+    }
+}
+
+fn map_game_server_error(err: GameServerClientError) -> Result<Response, ApiError> {
+    match err {
+        // "Understood but refused" (character not found/not yours, invalid
+        // name, name already taken) -- forwarded verbatim, same
+        // "the frontend needs the real message" reasoning `map_or_forward`
+        // already applies to xindeler-auth's TOTP-specific rejections. The
+        // game server's own message is already safe to show (see that
+        // repo's `PersistenceError::public_message()`), just plain text
+        // instead of a JSON envelope, so there's no upstream `code` to
+        // forward alongside it -- a single generic one covers every 409
+        // shape from this endpoint.
+        GameServerClientError::Rejected {
+            status: 409,
+            message,
+        } => Ok(error::forwarded_response(
+            409,
+            "CHARACTER_ACTION_REJECTED".to_owned(),
+            message,
+        )),
+        GameServerClientError::Rejected { status, message } => {
+            log::warn!("game server answered with unexpected status {status}: {message}");
+            Err(ApiError::UpstreamGameServerError)
+        }
+        GameServerClientError::Request(err) => {
+            log::warn!("request to game server failed: {err}");
+            Err(ApiError::UpstreamGameServerError)
+        }
+    }
+}
+
+pub fn list_characters(request: &Request, state: &AppState) -> Result<Response, ApiError> {
+    let identity = resolve_session(request)?;
+    let uuid = session_uuid(&identity.uuid)?;
+    let token = state
+        .auth_client
+        .issue_character_access_token(uuid)
+        .map_err(map_character_token_error)?;
+    match state.game_server_client.list_characters(token) {
+        Ok(characters) => Ok(Response::json(&CharactersResponse { characters })),
+        Err(err) => map_game_server_error(err),
+    }
+}
+
+pub fn rename_character(
+    body: &[u8],
+    request: &Request,
+    character_id: i64,
+    state: &AppState,
+) -> Result<Response, ApiError> {
+    let identity = resolve_session(request)?;
+    let payload: RenameCharacterRequest = serde_json::from_slice(body)?;
+    if payload.new_alias.trim().is_empty() {
+        return Err(ApiError::InvalidRequest("new_alias is required".into()));
+    }
+
+    let uuid = session_uuid(&identity.uuid)?;
+    let token = state
+        .auth_client
+        .issue_character_access_token(uuid)
+        .map_err(map_character_token_error)?;
+    match state
+        .game_server_client
+        .rename_character(token, character_id, &payload.new_alias)
+    {
+        Ok(()) => Ok(Response::json(&OkResponse { ok: true })),
+        Err(err) => map_game_server_error(err),
     }
 }

@@ -269,10 +269,20 @@ llama directo desde el frontend, todo pasa por acá.
   topología no está decidida — flagged para confirmar con Matías antes del deploy real de esta
   fase, no algo que este documento pueda asumir.
 
-**Estado:** diseño listo, sin implementar. **No dispatchable todavía** — mismo pedido de Matías
-(2026-08-16) que en los otros dos repos: spec+plan+tasks mergeados en los tres
-(`xindeler-new-horizon`, `xindeler-auth`, este) antes de que arranque cualquier implementación en
-cualquiera de los tres; el orden real de dispatch lo definió él: `xindeler-new-horizon` primero.
+**Estado:** 🟡 IMPLEMENTADO 2026-08-19, no mergeado — esperando revisión de PR. Orden de dispatch
+cumplido: `xindeler-new-horizon` (PR #197, mergeado) → `xindeler-auth` (PR #39, N-01, no mergeado
+todavía — este repo pineó su `xindeler-auth-common` directo a esa rama de feature, a re-pinear una
+vez que mergee) → este repo. Implementado: `AuthClient::issue_character_access_token` (nueva
+credencial `WEB_API_SERVICE_TOKEN`, nunca la existente), `game_server_client.rs` nuevo (cliente
+propio, respuestas de rechazo en texto plano, no el envelope JSON de `xindeler-auth`),
+`GET /api/account/characters` y `POST /api/account/characters/{id}/rename`, guard de arranque que
+rechaza si `AUTH_SERVICE_TOKEN` y `WEB_API_SERVICE_TOKEN` coinciden. 84 tests en verde (38
+unitarios + 46 de integración, 7 nuevos de Fase F). El riesgo de topología (loopback-only del game
+server) sigue sin resolver — no bloquea el código, sí el deploy real. **Bloqueador de seguridad
+real para el deploy** (hallazgo 2026-08-19, ver detalle en `PLAN.md`): `player_api/v1` en
+`xindeler-new-horizon` todavía usa su stub de auth de la Fase 1 (confía en el bearer crudo como
+`uuid`, sin canjearlo contra `xindeler-auth`) — esta fase no puede ir a producción con datos reales
+hasta que la Fase 2 de NH-79 mergee ahí.
 
 ---
 

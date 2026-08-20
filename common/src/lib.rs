@@ -152,3 +152,40 @@ pub struct TotpBackupCodesResponse {
     /// short of `2fa/backup-codes/regenerate`, which invalidates the old set.
     pub backup_codes: Vec<String>,
 }
+
+/// Fase F (NH-79): a character's resolved location. Mirrors
+/// `xindeler-new-horizon`'s `LocationDto` field-for-field — only `site`
+/// resolves against real data today, `kingdom`/`continent` stay `None`
+/// until a real world hierarchy exists there.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Location {
+    pub site: String,
+    pub kingdom: Option<String>,
+    pub continent: Option<String>,
+}
+
+/// Mirrors `xindeler-new-horizon`'s `CharacterSummaryDto` field-for-field —
+/// this is a straight proxy of the game server's own response shape, not a
+/// re-derived one, so a mismatch here would silently corrupt every
+/// character-list read.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CharacterSummary {
+    pub character_id: i64,
+    pub name: String,
+    pub level: u32,
+    pub class: String,
+    pub location: Option<Location>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CharactersResponse {
+    pub characters: Vec<CharacterSummary>,
+}
+
+/// Requires an active session — `identity.uuid` is what actually authorizes
+/// the rename against the game server (via a freshly-minted
+/// `CharacterAccessToken`), never anything the client supplies.
+#[derive(Debug, Deserialize)]
+pub struct RenameCharacterRequest {
+    pub new_alias: String,
+}

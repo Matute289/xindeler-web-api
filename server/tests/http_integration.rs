@@ -1171,3 +1171,178 @@ fn sigterm_shuts_down_cleanly_and_promptly() {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+// --- Fase F (NH-79): character-list/rename proxy. `FakeAuthServer` (above)
+// is reused verbatim as the fake game server too -- it's a generic
+// canned-path-prefix responder, not auth-specific.
+
+const WEB_API_SERVICE_TOKEN: &str = "fedcba9876543210fedcba9876543210";
+const ISSUE_CHARACTER_TOKEN_OK: (&str, u16, &str) = (
+    "/issue-character-access-token",
+    200,
+    r#"{"token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","expires_in":60}"#,
+);
+
+#[test]
+fn character_endpoints_require_a_session() {
+    let server = TestServer::start();
+
+    let list = Client::new()
+        .get(server.url("/api/account/characters"))
+        .send()
+        .unwrap();
+    assert_eq!(list.status(), 401);
+
+    let rename = Client::new()
+        .post(server.url("/api/account/characters/1/rename"))
+        .json(&json!({"new_alias": "Newname"}))
+        .send()
+        .unwrap();
+    assert_eq!(rename.status(), 401);
+}
+
+#[test]
+fn list_characters_returns_the_proxied_summaries() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ISSUE_CHARACTER_TOKEN_OK]);
+    let game_server = FakeAuthServer::start(&[(
+        "/player_api/v1/characters",
+        200,
+        r#"[{"character_id":1,"name":"Aragorn","level":5,"class":"Warrior","location":null}]"#,
+    )]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+        ("WEB_API_SERVICE_TOKEN", WEB_API_SERVICE_TOKEN),
+        ("WEB_API_GAME_SERVER_PLAYER_API_URL", &game_server.base_url),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .get(server.url("/api/account/characters"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body = body_json(response);
+    assert_eq!(body["characters"][0]["character_id"], 1);
+    assert_eq!(body["characters"][0]["name"], "Aragorn");
+    assert_eq!(body["characters"][0]["level"], 5);
+}
+
+#[test]
+fn rename_character_succeeds_and_forwards_the_new_alias() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ISSUE_CHARACTER_TOKEN_OK]);
+    let game_server = FakeAuthServer::start(&[("/player_api/v1/characters/", 204, "")]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+        ("WEB_API_SERVICE_TOKEN", WEB_API_SERVICE_TOKEN),
+        ("WEB_API_GAME_SERVER_PLAYER_API_URL", &game_server.base_url),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/characters/1/rename"))
+        .header("Cookie", &cookie)
+        .json(&json!({"new_alias": "Renamed"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(body_json(response)["ok"], true);
+}
+
+#[test]
+fn rename_character_rejects_an_empty_alias_without_calling_upstream() {
+    // No game server started at all -- if validation didn't run first and
+    // this reached the network, it would fail to connect and return 502,
+    // not 422. A 422 here proves validation happens before any upstream
+    // call. `auth` still needs to exist for the initial login itself.
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/characters/1/rename"))
+        .header("Cookie", &cookie)
+        .json(&json!({"new_alias": "   "}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 422);
+}
+
+#[test]
+fn rename_character_forwards_a_409_rejection_from_the_game_server() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ISSUE_CHARACTER_TOKEN_OK]);
+    let game_server = FakeAuthServer::start(&[(
+        "/player_api/v1/characters/",
+        409,
+        "Character name is already taken",
+    )]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+        ("WEB_API_SERVICE_TOKEN", WEB_API_SERVICE_TOKEN),
+        ("WEB_API_GAME_SERVER_PLAYER_API_URL", &game_server.base_url),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/characters/1/rename"))
+        .header("Cookie", &cookie)
+        .json(&json!({"new_alias": "Taken"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 409);
+    let body = body_json(response);
+    assert_eq!(body["code"], "CHARACTER_ACTION_REJECTED");
+    assert_eq!(body["message"], "Character name is already taken");
+}
+
+#[test]
+fn character_endpoints_fail_closed_when_web_api_service_token_is_missing() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+        // WEB_API_SERVICE_TOKEN deliberately unset.
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .get(server.url("/api/account/characters"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 500);
+}
+
+#[test]
+fn list_characters_forwards_upstream_unavailability_as_502() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ISSUE_CHARACTER_TOKEN_OK]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+        ("WEB_API_SERVICE_TOKEN", WEB_API_SERVICE_TOKEN),
+        // No game server listening on this port -- WEB_API_GAME_SERVER_PLAYER_API_URL
+        // keeps its default (127.0.0.1:14005), which nothing binds to in CI.
+        ("WEB_API_GAME_SERVER_PLAYER_API_URL", "http://127.0.0.1:1"),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .get(server.url("/api/account/characters"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 502);
+    assert_eq!(body_json(response)["code"], "UPSTREAM_ERROR");
+}

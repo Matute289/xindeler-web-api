@@ -29,6 +29,12 @@ pub enum ApiError {
     /// xindeler-auth didn't respond, or responded with something this
     /// service doesn't know how to interpret (not a client input problem).
     UpstreamAuthError,
+    /// Fase F: the game server (`xindeler-new-horizon` NH-79's
+    /// `/player_api/v1`) didn't respond, or responded with something this
+    /// service doesn't know how to interpret. A separate variant from
+    /// `UpstreamAuthError` since it's a genuinely different upstream, worth
+    /// distinguishing when troubleshooting.
+    UpstreamGameServerError,
 }
 
 impl ApiError {
@@ -42,7 +48,7 @@ impl ApiError {
             ApiError::RateLimit => 429,
             ApiError::RequestTooLarge => 413,
             ApiError::InvalidCredentials | ApiError::Unauthorized => 401,
-            ApiError::UpstreamAuthError => 502,
+            ApiError::UpstreamAuthError | ApiError::UpstreamGameServerError => 502,
         }
     }
 }
@@ -89,6 +95,7 @@ pub fn public_fields(error: &ApiError) -> (&'static str, &'static str) {
         ),
         ApiError::Unauthorized => ("UNAUTHORIZED", "Not logged in."),
         ApiError::UpstreamAuthError => ("UPSTREAM_ERROR", "Authentication service unavailable."),
+        ApiError::UpstreamGameServerError => ("UPSTREAM_ERROR", "Game server unavailable."),
         ApiError::InternalServerError
         | ApiError::Db(_)
         | ApiError::Migration(_)
