@@ -20,7 +20,7 @@ backlog de `xindeler-web-landing`.
 | P2 — Producto | Sesión web autenticada | Fase C | Fase B `done` |
 | P3 — Cierre | Frontend consume la sesión | Fase D | Fase C `done` — **`done`, ver detalle abajo** |
 | — | Proxy de 2FA/TOTP para la pantalla de cuenta | Fase E | `done` (2026-08-15), en producción |
-| P2 — Producto | Proxy de personajes (`xindeler-new-horizon` NH-79) | Fase F | Diseño listo, sin implementar — bloqueado en que `xindeler-auth` y `xindeler-new-horizon` también tengan sus specs/plans/tasks mergeados (pedido de Matías, 2026-08-16) |
+| P2 — Producto | Proxy de personajes (`xindeler-new-horizon` NH-79) | Fase F | `done` (2026-08-20) — implementado y mergeado (PR #14, re-pin PR #15). Ver detalle abajo. **Sin deploy a producción todavía.** |
 
 ## Fase A — Repo, fundaciones y hardening (2026-08-14)
 
@@ -269,20 +269,20 @@ llama directo desde el frontend, todo pasa por acá.
   topología no está decidida — flagged para confirmar con Matías antes del deploy real de esta
   fase, no algo que este documento pueda asumir.
 
-**Estado:** 🟡 IMPLEMENTADO 2026-08-19, no mergeado — esperando revisión de PR. Orden de dispatch
-cumplido: `xindeler-new-horizon` (PR #197, mergeado) → `xindeler-auth` (PR #39, N-01, no mergeado
-todavía — este repo pineó su `xindeler-auth-common` directo a esa rama de feature, a re-pinear una
-vez que mergee) → este repo. Implementado: `AuthClient::issue_character_access_token` (nueva
+**Estado:** 🟢 `done` (2026-08-20) — implementado y mergeado, PR [#14](https://github.com/Matute289/xindeler-web-api/pull/14) más el re-pin [#15](https://github.com/Matute289/xindeler-web-api/pull/15) (una vez que N-01 mergeó en `xindeler-auth`, este repo dejó de apuntar a esa rama de feature y volvió a `main`). Orden de dispatch
+cumplido: `xindeler-new-horizon` Fase 1 ([PR #197](https://github.com/Matute289/xindeler-new-horizon/pull/197)) → `xindeler-auth` N-01 ([PR #39](https://github.com/Matute289/xindeler-auth/pull/39)/[#40](https://github.com/Matute289/xindeler-auth/pull/40)) → este repo → `xindeler-new-horizon` Fase 2 ([PR #198](https://github.com/Matute289/xindeler-new-horizon/pull/198), reemplaza el stub de auth por la verificación real). Implementado: `AuthClient::issue_character_access_token` (nueva
 credencial `WEB_API_SERVICE_TOKEN`, nunca la existente), `game_server_client.rs` nuevo (cliente
 propio, respuestas de rechazo en texto plano, no el envelope JSON de `xindeler-auth`),
 `GET /api/account/characters` y `POST /api/account/characters/{id}/rename`, guard de arranque que
 rechaza si `AUTH_SERVICE_TOKEN` y `WEB_API_SERVICE_TOKEN` coinciden. 84 tests en verde (38
-unitarios + 46 de integración, 7 nuevos de Fase F). El riesgo de topología (loopback-only del game
-server) sigue sin resolver — no bloquea el código, sí el deploy real. **Bloqueador de seguridad
-real para el deploy** (hallazgo 2026-08-19, ver detalle en `PLAN.md`): `player_api/v1` en
-`xindeler-new-horizon` todavía usa su stub de auth de la Fase 1 (confía en el bearer crudo como
-`uuid`, sin canjearlo contra `xindeler-auth`) — esta fase no puede ir a producción con datos reales
-hasta que la Fase 2 de NH-79 mergee ahí.
+unitarios + 46 de integración, 7 nuevos de Fase F).
+
+**El bloqueador de seguridad real que impedía el deploy ya se resolvió** — la Fase 2 de NH-79
+mergeó (`xindeler-new-horizon` PR #198), así que `player_api/v1` ya no confía en un bearer crudo
+como `uuid`, verifica de verdad contra `xindeler-auth`. Sigue pendiente, sin resolver: el riesgo de
+topología (loopback-only del game server, requiere mismo host que este servicio) y el deploy en sí
+— Matías va a levantar todo local primero y probar que funcione antes de deployar nada a
+producción.
 
 ---
 
