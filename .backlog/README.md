@@ -267,7 +267,8 @@ llama directo desde el frontend, todo pasa por acá.
   terminan corriendo en el **mismo host**. El game server todavía no está deployado
   (`CLAUDE.md` de `xindeler-web-landing`: "el servidor aún no está deployado"), así que esta
   topología no está decidida — flagged para confirmar con Matías antes del deploy real de esta
-  fase, no algo que este documento pueda asumir.
+  fase, no algo que este documento pueda asumir. **Resuelto 2026-08-20** (ver sección "Deploy a
+  producción" más abajo): mismo VPS, mismo host — el riesgo listado acá ya no aplica.
 
 **Estado:** 🟢 `done` (2026-08-20) — implementado y mergeado, PR [#14](https://github.com/Matute289/xindeler-web-api/pull/14) más el re-pin [#15](https://github.com/Matute289/xindeler-web-api/pull/15) (una vez que N-01 mergeó en `xindeler-auth`, este repo dejó de apuntar a esa rama de feature y volvió a `main`). Orden de dispatch
 cumplido: `xindeler-new-horizon` Fase 1 ([PR #197](https://github.com/Matute289/xindeler-new-horizon/pull/197)) → `xindeler-auth` N-01 ([PR #39](https://github.com/Matute289/xindeler-auth/pull/39)/[#40](https://github.com/Matute289/xindeler-auth/pull/40)) → este repo → `xindeler-new-horizon` Fase 2 ([PR #198](https://github.com/Matute289/xindeler-new-horizon/pull/198), reemplaza el stub de auth por la verificación real). Implementado: `AuthClient::issue_character_access_token` (nueva
@@ -300,17 +301,24 @@ también — confirma que la ruta está activa, no `404`. Logs de arranque limpi
 en producción hasta que se complete lo siguiente:**
 1. El game server de `xindeler-new-horizon` está deployado en el VPS pero con una **versión
    vieja**, sin NH-79 — Matías priorizó una tarea nueva en ese repo para actualizarlo (ver su
-   backlog), después de la que ya está en curso ahí.
+   backlog), después de la que ya está en curso ahí. **Actualización 2026-08-20 (más tarde el
+   mismo día):** esa tarea (BL-83) mergeó su deploy script
+   ([PR #203](https://github.com/Matute289/xindeler-new-horizon/pull/203)), pero, según el propio
+   PR, todavía no se corrió contra producción — sigue sin confirmar si el binario que está
+   realmente corriendo en el VPS ya incluye NH-79 o sigue siendo la versión vieja.
 2. `WEB_API_SERVICE_TOKEN` todavía no está en el `.env` de este servicio en el VPS (confirmado
    por SSH, `grep` de las claves — el valor no se tocó desde acá). Tiene que ser el mismo valor
    ya configurado del lado de `xindeler-auth`.
 3. `WEB_API_GAME_SERVER_PLAYER_API_URL` no está seteada — cae al default
    `http://127.0.0.1:14005`, que hay que confirmar contra el puerto real que use el game server
    nuevo en producción.
-4. El riesgo de topología (el game server es loopback-only por NH-75, necesita compartir host con
-   este servicio) sigue sin resolver.
+4. ~~El riesgo de topología (el game server es loopback-only por NH-75, necesita compartir host
+   con este servicio) sigue sin resolver.~~ **Resuelto 2026-08-20**: una verificación de
+   infraestructura confirmó `xindeler-server-cli` corriendo en el mismo VPS que este servicio —
+   `0.0.0.0:14004` (protocolo del juego, público) y `127.0.0.1:14005` (`player_api/v1`, loopback,
+   tal como exige NH-75). Mismo host, loopback intacto — ya no es un riesgo abierto.
 
-Hasta que se resuelvan 1-4, `GET/POST /api/account/characters*` va a devolver error ante cualquier
+Hasta que se resuelvan 1-3, `GET/POST /api/account/characters*` va a devolver error ante cualquier
 llamada real — esperado y aceptado por Matías para este deploy ("por ahora cuando se quiera
 consumir ese servicio va a tirar error").
 
