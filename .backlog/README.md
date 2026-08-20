@@ -279,10 +279,17 @@ unitarios + 46 de integración, 7 nuevos de Fase F).
 
 **El bloqueador de seguridad real que impedía el deploy ya se resolvió** — la Fase 2 de NH-79
 mergeó (`xindeler-new-horizon` PR #198), así que `player_api/v1` ya no confía en un bearer crudo
-como `uuid`, verifica de verdad contra `xindeler-auth`. Sigue pendiente, sin resolver: el riesgo de
-topología (loopback-only del game server, requiere mismo host que este servicio) y el deploy en sí
-— Matías va a levantar todo local primero y probar que funcione antes de deployar nada a
-producción.
+como `uuid`, verifica de verdad contra `xindeler-auth`.
+
+**Validado end-to-end en local 2026-08-20**: los tres servicios corriendo juntos (este +
+`xindeler-auth` + `xindeler-new-horizon`), cuenta real: se creó un personaje por el protocolo real
+del juego, se lo listó y renombró vía `GET/POST /api/account/characters*`, se probaron los tres
+casos de rechazo (nombre vacío, caracteres inválidos, personaje inexistente), y se lo eliminó — con
+la cadena de auth real de punta a punta. De paso se encontró y arregló (ajeno a esta fase) un bug
+que crasheaba el arranque del game server (`EventBus<DismissSummonEvent>` sin registrar,
+`xindeler-new-horizon` [PR #199](https://github.com/Matute289/xindeler-new-horizon/pull/199)).
+Sigue pendiente, sin resolver: el riesgo de topología (loopback-only del game server, requiere
+mismo host que este servicio) y el deploy en sí.
 
 ---
 
