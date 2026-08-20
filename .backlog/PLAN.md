@@ -51,8 +51,19 @@ justamente el motivo de la Fase 2. Bloqueador a trackear en el backlog de `xinde
 `XINDELER_PLAYER_API_DEBUG_AUTH` se eliminó por completo del código — ya no queda ningún modo
 inseguro que gatear. `xindeler-auth` N-01 ([PR #39](https://github.com/Matute289/xindeler-auth/pull/39)/[#40](https://github.com/Matute289/xindeler-auth/pull/40)) también mergeó, y este repo re-pineó
 su dependencia a `main` real ([PR #15](https://github.com/Matute289/xindeler-web-api/pull/15)). El
-riesgo de topología de la línea 26-29 sigue sin resolver — Matías va a probar todo local primero
-antes de decidir el deploy real.
+riesgo de topología de la línea 26-29 sigue sin resolver.
+
+**Validado end-to-end en local, mismo día.** Los tres servicios (este + `xindeler-auth` +
+`xindeler-new-horizon`) corriendo juntos, con una cuenta de prueba real: se creó un personaje por
+el protocolo real del juego (no un insert a mano), se lo listó y renombró a través de
+`GET/POST /api/account/characters*` de este repo, se probaron los casos de rechazo (nombre vacío →
+`422` sin tocar la red, caracteres inválidos → `409` reenviado con el mensaje real del game server,
+personaje inexistente → `409`), y se lo eliminó — todo con la cadena de auth real (sin el stub de
+debug). El bug encontrado en el camino (`EventBus<DismissSummonEvent>` sin registrar, crasheaba
+el game server al arrancar) era ajeno a esta Fase F, ya se arregló en
+[PR #199](https://github.com/Matute289/xindeler-new-horizon/pull/199) de `xindeler-new-horizon`.
+Único pendiente real: decidir la topología de deploy (`xindeler-new-horizon` todavía no está
+deployado en ningún lado).
 
 ## Estado actualizado al 2026-08-15 — backlog 007 completo, en producción
 
