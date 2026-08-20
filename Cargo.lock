@@ -2382,7 +2382,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 [[package]]
 name = "xindeler-auth-common"
 version = "0.1.0"
-source = "git+ssh://git@github.com/Matute289/xindeler-auth.git?rev=ef9e216c6aef051fd5b5e04f976d12ec7638eea6#ef9e216c6aef051fd5b5e04f976d12ec7638eea6"
+source = "git+ssh://git@github.com/Matute289/xindeler-auth.git?rev=01995f6259f48a43c1e7b9fd5b4ffc5aaa7da4bc#01995f6259f48a43c1e7b9fd5b4ffc5aaa7da4bc"
 dependencies = [
  "hex",
  "rand",
