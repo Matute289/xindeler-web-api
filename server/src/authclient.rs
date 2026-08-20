@@ -10,9 +10,11 @@
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Deserialize;
 use std::time::Duration;
+use uuid::Uuid;
 use xindeler_auth_common::{
-    AuthToken, ChallengeId, ChangePasswordPayload, ChangeUsernamePayload, DeleteAccountPayload,
-    EmailVerificationRequiredResponse, ForgotPasswordPayload, ResetPasswordPayload, SignInPayload,
+    AuthToken, ChallengeId, ChangePasswordPayload, ChangeUsernamePayload,
+    CharacterAccessTokenResponse, DeleteAccountPayload, EmailVerificationRequiredResponse,
+    ForgotPasswordPayload, IssueCharacterAccessTokenPayload, ResetPasswordPayload, SignInPayload,
     SignInResponse, TotpBackupCodesResponse, TotpChallengeResponse, TotpCodePayload,
     TotpEnrollPayload, TotpEnrollResponse, TotpLoginPayload, UsernameAvailabilityResponse,
     ValidityCheckPayload, ValidityCheckResponse,
@@ -49,6 +51,10 @@ pub enum AuthClientError {
     /// `verify()` was called but this service has no `AUTH_SERVICE_TOKEN`
     /// configured — a deployment problem, not a client input problem.
     MissingServiceToken,
+    /// `issue_character_access_token()` was called but this service has no
+    /// `WEB_API_SERVICE_TOKEN` configured — the *new*, distinct credential
+    /// (Fase F), never `service_token`/`MissingServiceToken` above.
+    MissingCharacterServiceToken,
 }
 
 /// What a 2FA-aware login resolves to: either xindeler-auth had no TOTP to
@@ -134,10 +140,15 @@ pub struct AuthClient {
     client: reqwest::blocking::Client,
     base_url: String,
     service_token: Option<String>,
+    character_service_token: Option<String>,
 }
 
 impl AuthClient {
-    pub fn new(base_url: &str, service_token: Option<&str>) -> Self {
+    pub fn new(
+        base_url: &str,
+        service_token: Option<&str>,
+        character_service_token: Option<&str>,
+    ) -> Self {
         let client = reqwest::blocking::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
@@ -148,6 +159,7 @@ impl AuthClient {
             client,
             base_url: base_url.trim_end_matches('/').to_owned(),
             service_token: service_token.map(str::to_owned),
+            character_service_token: character_service_token.map(str::to_owned),
         }
     }
 
@@ -245,6 +257,36 @@ impl AuthClient {
             return Err(rejection_with_body(status.as_u16(), response));
         }
         Ok(response.json()?)
+    }
+
+    /// Fase F: mints a fresh `CharacterAccessToken` for `uuid`, to hand off
+    /// to `game_server_client::GameServerClient` immediately afterward.
+    /// Deliberately never cached across calls — 60s TTL, one-shot, minted
+    /// fresh per character-list-read or per-rename action, same as
+    /// xindeler-auth's own design intends (N-01 spec's "Redemption"
+    /// section). Uses `character_service_token`
+    /// (`WEB_API_SERVICE_TOKEN`) — never `service_token`, which
+    /// xindeler-auth explicitly refuses for this endpoint.
+    pub fn issue_character_access_token(
+        &self,
+        uuid: Uuid,
+    ) -> Result<xindeler_auth_common::CharacterAccessToken, AuthClientError> {
+        let character_service_token = self
+            .character_service_token
+            .as_deref()
+            .ok_or(AuthClientError::MissingCharacterServiceToken)?;
+        let payload = IssueCharacterAccessTokenPayload { uuid };
+        let response = self
+            .client
+            .post(format!("{}/issue-character-access-token", self.base_url))
+            .bearer_auth(character_service_token)
+            .json(&payload)
+            .send()?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(rejection_with_body(status.as_u16(), response));
+        }
+        Ok(response.json::<CharacterAccessTokenResponse>()?.token)
     }
 
     // The methods below are public, unauthenticated endpoints on

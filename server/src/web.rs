@@ -58,6 +58,20 @@ fn remote(request: &Request, network: &NetworkConfig) -> IpAddr {
         .unwrap_or(peer)
 }
 
+/// `/api/account/characters/{character_id}/rename` -- this router matches
+/// exact `(method, path)` tuples, so a dynamic segment needs its own small
+/// parse instead of a templating library. `character_id` is untrusted input
+/// only in the sense that it's attacker-controlled; it's never used for
+/// anything but a parameterized game-server call, so an unparseable or
+/// out-of-range value is just "no such character" downstream, not a
+/// security concern in itself.
+fn character_rename_path(path: &str) -> Option<i64> {
+    path.strip_prefix("/api/account/characters/")?
+        .strip_suffix("/rename")?
+        .parse()
+        .ok()
+}
+
 /// The body is already read by the HTTP adapter; this only surfaces a
 /// failure at the point a handler asks for it.
 fn take_request_data(request: &Request) -> Result<&[u8], ApiError> {
@@ -127,6 +141,17 @@ fn dispatch(request: &Request, state: &AppState, network: &NetworkConfig) -> Res
         ("POST", "/api/account/2fa/backup-codes/regenerate") => take_request_data(request)
             .and_then(|body| account::totp_regenerate_backup_codes(body, request, state))
             .unwrap_or_else(error::response),
+        ("GET", "/api/account/characters") => {
+            account::list_characters(request, state).unwrap_or_else(error::response)
+        }
+        ("POST", path) if character_rename_path(path).is_some() => {
+            match character_rename_path(path) {
+                Some(character_id) => take_request_data(request)
+                    .and_then(|body| account::rename_character(body, request, character_id, state))
+                    .unwrap_or_else(error::response),
+                None => Response::empty_404(),
+            }
+        }
         _ => Response::empty_404(),
     };
 

@@ -60,6 +60,8 @@ WEB_API_BIND_ADDR=127.0.0.1:8020 cargo run -p xindeler-web-api-server
 | `OWNER_EMAIL` | — (opcional) | Destinatario de notificaciones de contribuidores + digest mensual |
 | `AUTH_PUBLIC_URL` | `https://auth.xindeler.com` | Base URL de `xindeler-auth` para `/api/session/login` |
 | `AUTH_SERVICE_TOKEN` | — (opcional*) | Mismo secreto de servicio que ya usa el game server contra `xindeler-auth` (`/verify`). *Requerido en la práctica para que el login funcione — sin él, `/api/session/login` responde 500 |
+| `WEB_API_SERVICE_TOKEN` | — (opcional*) | Fase F: credencial *nueva*, nunca igual a `AUTH_SERVICE_TOKEN` (el arranque falla si coinciden), que este servicio presenta a `xindeler-auth` en `/issue-character-access-token`. *Requerido en la práctica para `/api/account/characters*` — sin él, esos endpoints responden 500 |
+| `WEB_API_GAME_SERVER_PLAYER_API_URL` | `http://127.0.0.1:14005` | Base URL del router `/player_api/v1` del game server (`xindeler-new-horizon` NH-79) — puerto HTTP loopback-only, distinto de `WEB_API_GAME_SERVER_ADDR` (que es el puerto TCP crudo que prueba `/api/status`) |
 | `RUST_LOG` | *(sin logs)* | Nivel de log (`env_logger`), ej. `info` |
 
 ## Endpoints
@@ -85,6 +87,8 @@ WEB_API_BIND_ADDR=127.0.0.1:8020 cargo run -p xindeler-web-api-server
 | `POST` | `/api/account/2fa/confirm` | ✅ Fase 2 (005) |
 | `POST` | `/api/account/2fa/disable` | ✅ Fase 2 (005) |
 | `POST` | `/api/account/2fa/backup-codes/regenerate` | ✅ Fase 2 (005) |
+| `GET` | `/api/account/characters` | ✅ Fase F (NH-79) |
+| `POST` | `/api/account/characters/{character_id}/rename` | ✅ Fase F (NH-79) |
 
 Los endpoints de `/api/account/*` que exigen sesión activa (`change-username`, `change-password`,
 `delete`, los cuatro de `2fa/*`) usan el `username` de la sesión — nunca uno provisto por el
@@ -114,6 +118,15 @@ de TOTP"): se infiere de si el login pasó por el challenge, y se actualiza en c
 específicos de TOTP (`TOTP_INVALID_CODE`, `ACCOUNT_2FA_LOCKED`, etc.) se reenvían con el mismo
 `code`/`message` que devuelve `xindeler-auth`, en vez de colapsarse a un error genérico — mismo
 criterio que ya se usaba para `EMAIL_VERIFICATION_REQUIRED`.
+
+**Personajes (Fase F, NH-79):** ambos endpoints exigen sesión activa y siguen un flujo de tres
+saltos por request, sin cachear nada entre acciones — `resolve_session` → pedirle a `xindeler-auth`
+un `CharacterAccessToken` acotado (60s, un solo uso) vía `WEB_API_SERVICE_TOKEN` → reenviar ese
+token al game server (`player_api/v1`, loopback-only por NH-75). El game server responde texto
+plano en sus rechazos (no el `{code, message}` de `xindeler-auth`), así que un 409 de rename
+(nombre repetido, personaje inexistente/ajeno, nombre inválido) se reenvía con `code
+CHARACTER_ACTION_REJECTED` y el mensaje textual tal cual, sin intentar distinguir el motivo exacto
+por más granularidad server-side.
 
 ## Subcomandos CLI
 

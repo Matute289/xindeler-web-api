@@ -1,20 +1,49 @@
 # Plan — xindeler-web-api
 
-## Estado actualizado al 2026-08-16 — Fase F diseñada, sin implementar
+## Estado actualizado al 2026-08-19 — Fase F implementada, no mergeada
 
-Fase E (proxy de 2FA) cerrada y en producción desde 2026-08-15 (ver `.backlog/README.md`). Nueva
-**Fase F — proxy de personajes** (relayada desde `xindeler-new-horizon` NH-79, worksheet resuelto
-2026-08-16): diseño completo en `.backlog/README.md`, **sin implementar**. Bloqueada por pedido
-explícito de Matías, no por nada técnico — spec+plan+tasks tienen que estar mergeados en los tres
-repos involucrados (este, `xindeler-auth` PR #38, `xindeler-new-horizon`) antes de que arranque
-cualquier implementación en cualquiera de los tres. Orden real de dispatch cuando llegue ese
-momento: `xindeler-new-horizon` primero, este repo después (depende del token acotado que
-`xindeler-auth` Fase N todavía no implementó tampoco).
+Fase E (proxy de 2FA) cerrada y en producción desde 2026-08-15 (ver `.backlog/README.md`). **Fase
+F — proxy de personajes** (relayada desde `xindeler-new-horizon` NH-79): implementación completa
+en la rama `feat/fase-f-character-proxy`, esperando revisión de PR. Orden real de dispatch
+cumplido: `xindeler-new-horizon` (PR #197, mergeado) → `xindeler-auth` (PR #39, N-01, todavía sin
+mergear — este repo pineó `xindeler-auth-common` directo a esa rama de feature de puente, pendiente
+de re-pinear a `main` cuando ese PR mergee) → este repo.
 
-**Riesgo a resolver antes de implementar, no solo de diseño**: la topología real de red entre este
-servicio y el game server (loopback-only por decisión de NH-75 en ese repo) no está confirmada — el
-game server todavía no está deployado en ningún lado. Confirmar con Matías si van a compartir host
-antes de escribir el cliente HTTP nuevo hacia ese servicio.
+- `AuthClient::issue_character_access_token(uuid)` — nueva credencial `WEB_API_SERVICE_TOKEN`,
+  nunca `AUTH_SERVICE_TOKEN` (que `xindeler-auth` rechaza explícitamente para ese endpoint).
+- `game_server_client.rs` (nuevo, no reusa `AuthClient`): `list_characters`/`rename_character`
+  contra `player_api/v1` del game server — sus rechazos son texto plano, no el envelope JSON
+  `{code, message, request_id}` de `xindeler-auth`, así que el cliente y el mapeo de errores lo
+  reflejan (`GameServerClientError::Rejected { status, message }`, sin `code`).
+- `GET /api/account/characters` y `POST /api/account/characters/{character_id}/rename` en
+  `account.rs`/`web.rs` — mismo patrón `resolve_session` → token fresco por llamada (nunca
+  cacheado, TTL 60s de un solo uso) → reenvío al game server.
+- Guard nuevo en `config.rs`: el arranque falla si `AUTH_SERVICE_TOKEN` y `WEB_API_SERVICE_TOKEN`
+  coinciden (más allá de lo que pedía el spec).
+- 84 tests en verde (38 unitarios + 46 de integración, 7 nuevos de Fase F, incluido un fake game
+  server reusando la misma infraestructura `FakeAuthServer` ya existente).
+
+**Riesgo sin resolver, no bloqueante para el código**: la topología real de red entre este servicio
+y el game server (loopback-only por decisión de NH-75 en ese repo) sigue sin confirmar — el game
+server todavía no está deployado en ningún lado. Bloquea el deploy real de esta fase, no el merge
+del PR.
+
+**Bloqueador real de seguridad para el deploy (hallazgo de la revisión de seguridad,
+2026-08-19), separado del riesgo de topología de arriba**: el código de `player_api/v1` que ya está
+mergeado en `xindeler-new-horizon` (PR #197, Fase 1 de NH-79) usa un stub de auth deliberado y
+documentado — confía en el valor crudo del header `Authorization: Bearer` como si fuera el `uuid`,
+sin canjearlo contra `xindeler-auth` (`/verify-character-access-token`, que solo existe en el PR
+#39 de `xindeler-auth`, todavía sin mergear). Esto es exactamente lo que la Fase 2 de NH-79 ("Wire
+the real auth scheme") tiene que reemplazar, y ya está gateado ahí mismo detrás de una env var de
+opt-in obligatoria (`XINDELER_PLAYER_API_DEBUG_AUTH=1`) para que no pueda arrancar por accidente en
+producción. Consecuencia concreta: **el código de este repo (Fase F) es correcto y está listo para
+mergear, pero no puede deployarse a producción con datos reales de jugadores hasta que la Fase 2 de
+NH-79 mergee en `xindeler-new-horizon`** — antes de eso, cualquiera con acceso directo al puerto
+loopback del game server podría listar/renombrar personajes de cualquier cuenta con un
+`Authorization: Bearer <cualquier-string>`. El límite de exposición real hoy es que ese puerto es
+loopback-only y el game server ni siquiera está deployado todavía — pero no depender de eso es
+justamente el motivo de la Fase 2. Bloqueador a trackear en el backlog de `xindeler-new-horizon`
+(NH-79 Fase 2), no algo que este repo pueda resolver unilateralmente.
 
 ## Estado actualizado al 2026-08-15 — backlog 007 completo, en producción
 

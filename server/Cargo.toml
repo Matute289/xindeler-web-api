@@ -34,7 +34,12 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 # Pin bumped deliberately when xindeler-auth ships something this repo
 # needs — same convention xindeler-new-horizon and xindeler-zuul use for
 # the same dependency.
-xindeler-auth-common = { package = "xindeler-auth-common", git = "ssh://git@github.com/Matute289/xindeler-auth.git", rev = "c40c3eb5f88b14515fde251433586f2e63ce071f" }
+#
+# NOTE (Fase F, 2026-08-19): pinned to xindeler-auth's feat/n01-character-access-token
+# branch (PR #39 there, not yet merged) to get CharacterAccessToken/
+# IssueCharacterAccessTokenPayload/VerifyCharacterAccessTokenPayload early.
+# Re-pin to a commit on that repo's main once PR #39 merges.
+xindeler-auth-common = { package = "xindeler-auth-common", git = "ssh://git@github.com/Matute289/xindeler-auth.git", rev = "ef9e216c6aef051fd5b5e04f976d12ec7638eea6" }
 
 [dev-dependencies]
 serde_json = "1.0.60"

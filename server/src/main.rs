@@ -7,6 +7,7 @@ mod config;
 mod db;
 mod digest;
 mod error;
+mod game_server_client;
 mod http;
 mod mailer;
 mod migrate_csv;

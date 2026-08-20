@@ -77,11 +77,28 @@ pub struct AppConfig {
     /// Optional so Fase 1-only local dev doesn't need a real one; session
     /// login fails closed with an internal error if it's unset.
     auth_service_token: Option<String>,
+    /// Fase F: the *new*, distinct credential this service presents to
+    /// `xindeler-auth`'s `POST /issue-character-access-token` — never
+    /// `auth_service_token` above, which xindeler-auth explicitly refuses
+    /// for that endpoint (the asymmetry is that repo's N-01 design's core
+    /// guarantee). Optional for the same "local dev without the full
+    /// cross-repo setup" reason as `auth_service_token`.
+    web_api_service_token: Option<String>,
+    /// Fase F: base URL of the game server's loopback-only `/player_api/v1`
+    /// HTTP router (`xindeler-new-horizon` NH-79) — distinct from
+    /// `game_server_addr` above, which is the raw TCP port `/api/status`
+    /// probes, not an HTTP endpoint. Defaults to that repo's own
+    /// `server-cli` default `web_address` port (14005).
+    pub game_server_player_api_url: String,
 }
 
 impl AppConfig {
     pub fn auth_service_token(&self) -> Option<&str> {
         self.auth_service_token.as_deref()
+    }
+
+    pub fn web_api_service_token(&self) -> Option<&str> {
+        self.web_api_service_token.as_deref()
     }
 }
 
@@ -192,6 +209,29 @@ impl AppConfig {
             other => other.cloned(),
         };
 
+        let web_api_service_token = match values.get("WEB_API_SERVICE_TOKEN") {
+            Some(token) if token.len() < 32 => {
+                return Err("WEB_API_SERVICE_TOKEN must contain at least 32 bytes".into())
+            }
+            other => other.cloned(),
+        };
+        // The two credentials authorize disjoint xindeler-auth endpoints by
+        // design (that repo's N-01) -- a deploy accidentally reusing one
+        // value for both env vars would silently erase that boundary.
+        if let (Some(auth), Some(web_api)) = (&auth_service_token, &web_api_service_token) {
+            if auth == web_api {
+                return Err(
+                    "AUTH_SERVICE_TOKEN and WEB_API_SERVICE_TOKEN must not be the same value"
+                        .into(),
+                );
+            }
+        }
+
+        let game_server_player_api_url = values
+            .get("WEB_API_GAME_SERVER_PLAYER_API_URL")
+            .cloned()
+            .unwrap_or_else(|| "http://127.0.0.1:14005".to_owned());
+
         Ok(Self {
             bind_addr,
             http_workers,
@@ -211,6 +251,8 @@ impl AppConfig {
                 .cloned()
                 .unwrap_or_else(|| "https://auth.xindeler.com".to_owned()),
             auth_service_token,
+            web_api_service_token,
+            game_server_player_api_url,
         })
     }
 }
@@ -234,6 +276,14 @@ impl std::fmt::Debug for AppConfig {
             .field(
                 "auth_service_token",
                 &self.auth_service_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "web_api_service_token",
+                &self.web_api_service_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "game_server_player_api_url",
+                &self.game_server_player_api_url,
             )
             .finish()
     }
@@ -269,6 +319,8 @@ mod tests {
         assert!(config.smtp.is_none());
         assert_eq!(config.auth_public_url, "https://auth.xindeler.com");
         assert!(config.auth_service_token().is_none());
+        assert!(config.web_api_service_token().is_none());
+        assert_eq!(config.game_server_player_api_url, "http://127.0.0.1:14005");
     }
 
     #[test]
@@ -287,14 +339,49 @@ mod tests {
     }
 
     #[test]
-    fn configuration_debug_output_redacts_auth_service_token() {
+    fn web_api_service_token_requires_at_least_32_bytes() {
+        assert!(AppConfig::from_iter(vec![("WEB_API_SERVICE_TOKEN", "too-short")]).is_err());
+
         let config = AppConfig::from_iter(vec![(
-            "AUTH_SERVICE_TOKEN",
-            "0123456789abcdef0123456789abcdef",
+            "WEB_API_SERVICE_TOKEN",
+            "fedcba9876543210fedcba9876543210",
         )])
+        .unwrap();
+        assert_eq!(
+            config.web_api_service_token(),
+            Some("fedcba9876543210fedcba9876543210")
+        );
+    }
+
+    #[test]
+    fn configuration_rejects_matching_auth_and_web_api_service_tokens() {
+        assert!(AppConfig::from_iter(vec![
+            ("AUTH_SERVICE_TOKEN", "0123456789abcdef0123456789abcdef"),
+            ("WEB_API_SERVICE_TOKEN", "0123456789abcdef0123456789abcdef"),
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn game_server_player_api_url_is_configurable() {
+        let config = AppConfig::from_iter(vec![(
+            "WEB_API_GAME_SERVER_PLAYER_API_URL",
+            "http://127.0.0.1:19999",
+        )])
+        .unwrap();
+        assert_eq!(config.game_server_player_api_url, "http://127.0.0.1:19999");
+    }
+
+    #[test]
+    fn configuration_debug_output_redacts_auth_service_token() {
+        let config = AppConfig::from_iter(vec![
+            ("AUTH_SERVICE_TOKEN", "0123456789abcdef0123456789abcdef"),
+            ("WEB_API_SERVICE_TOKEN", "fedcba9876543210fedcba9876543210"),
+        ])
         .unwrap();
         let debug = format!("{config:?}");
         assert!(!debug.contains("0123456789abcdef0123456789abcdef"));
+        assert!(!debug.contains("fedcba9876543210fedcba9876543210"));
     }
 
     #[test]

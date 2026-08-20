@@ -1,6 +1,7 @@
 use crate::authclient::AuthClient;
 use crate::cache::TtlCache;
 use crate::config::AppConfig;
+use crate::game_server_client::GameServerClient;
 use crate::ratelimit::RateLimiter;
 use std::time::Duration;
 
@@ -14,6 +15,7 @@ pub struct AppState {
     pub contribute_requests: RateLimiter,
     pub login_requests: RateLimiter,
     pub auth_client: AuthClient,
+    pub game_server_client: GameServerClient,
 }
 
 impl AppState {
@@ -25,7 +27,12 @@ impl AppState {
             waitlist_requests: RateLimiter::with_limits(config.rate_limit_max, window),
             contribute_requests: RateLimiter::with_limits(config.rate_limit_max, window),
             login_requests: RateLimiter::with_limits(config.rate_limit_max, window),
-            auth_client: AuthClient::new(&config.auth_public_url, config.auth_service_token()),
+            auth_client: AuthClient::new(
+                &config.auth_public_url,
+                config.auth_service_token(),
+                config.web_api_service_token(),
+            ),
+            game_server_client: GameServerClient::new(&config.game_server_player_api_url),
         }
     }
 }

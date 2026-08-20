@@ -121,6 +121,14 @@ fn map_sign_in_error(err: AuthClientError) -> ApiError {
             log::error!("AUTH_SERVICE_TOKEN is not configured — session login cannot work");
             ApiError::InternalServerError
         }
+        // Only issue_character_access_token() (Fase F) ever produces this
+        // variant — sign_in()/totp_login()/verify() (the only calls this
+        // function maps errors for) never do. Unreachable in practice, kept
+        // for exhaustiveness.
+        AuthClientError::MissingCharacterServiceToken => {
+            log::error!("session login hit MissingCharacterServiceToken unexpectedly");
+            ApiError::InternalServerError
+        }
         // login() unwraps this variant before ever calling map_sign_in_error
         // (see above); verify() never produces it (different endpoint). Kept
         // here only so the match stays exhaustive if a future caller forgets
