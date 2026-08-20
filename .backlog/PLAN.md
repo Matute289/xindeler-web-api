@@ -45,6 +45,15 @@ loopback-only y el game server ni siquiera está deployado todavía — pero no 
 justamente el motivo de la Fase 2. Bloqueador a trackear en el backlog de `xindeler-new-horizon`
 (NH-79 Fase 2), no algo que este repo pueda resolver unilateralmente.
 
+**Actualización 2026-08-20 — bloqueador resuelto.** La Fase 2 de NH-79 mergeó en
+`xindeler-new-horizon` ([PR #198](https://github.com/Matute289/xindeler-new-horizon/pull/198)):
+`player_api/v1` reemplazó el stub por la verificación real contra `xindeler-auth`, y
+`XINDELER_PLAYER_API_DEBUG_AUTH` se eliminó por completo del código — ya no queda ningún modo
+inseguro que gatear. `xindeler-auth` N-01 ([PR #39](https://github.com/Matute289/xindeler-auth/pull/39)/[#40](https://github.com/Matute289/xindeler-auth/pull/40)) también mergeó, y este repo re-pineó
+su dependencia a `main` real ([PR #15](https://github.com/Matute289/xindeler-web-api/pull/15)). El
+riesgo de topología de la línea 26-29 sigue sin resolver — Matías va a probar todo local primero
+antes de decidir el deploy real.
+
 ## Estado actualizado al 2026-08-15 — backlog 007 completo, en producción
 
 Las cuatro fases están cerradas y el corte de producción real ya se ejecutó: `xindeler-web-api`
