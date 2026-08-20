@@ -20,7 +20,7 @@ backlog de `xindeler-web-landing`.
 | P2 — Producto | Sesión web autenticada | Fase C | Fase B `done` |
 | P3 — Cierre | Frontend consume la sesión | Fase D | Fase C `done` — **`done`, ver detalle abajo** |
 | — | Proxy de 2FA/TOTP para la pantalla de cuenta | Fase E | `done` (2026-08-15), en producción |
-| P2 — Producto | Proxy de personajes (`xindeler-new-horizon` NH-79) | Fase F | `done` (2026-08-20) — implementado y mergeado (PR #14, re-pin PR #15). Ver detalle abajo. **Sin deploy a producción todavía.** |
+| P2 — Producto | Proxy de personajes (`xindeler-new-horizon` NH-79) | Fase F | `done` (2026-08-20) — implementado, mergeado (PR #14, re-pin PR #15) **y deployado a producción el mismo día**. Ver detalle abajo. |
 
 ## Fase A — Repo, fundaciones y hardening (2026-08-14)
 
@@ -288,8 +288,31 @@ casos de rechazo (nombre vacío, caracteres inválidos, personaje inexistente), 
 la cadena de auth real de punta a punta. De paso se encontró y arregló (ajeno a esta fase) un bug
 que crasheaba el arranque del game server (`EventBus<DismissSummonEvent>` sin registrar,
 `xindeler-new-horizon` [PR #199](https://github.com/Matute289/xindeler-new-horizon/pull/199)).
-Sigue pendiente, sin resolver: el riesgo de topología (loopback-only del game server, requiere
-mismo host que este servicio) y el deploy en sí.
+**Deploy a producción (2026-08-20, mismo día).** Mismo patrón manual que Fase B/E (sin CD
+automático): `git pull` + `cargo build --release --locked` en `/opt/xindeler-web-api/src`, binario
+anterior respaldado como `.previous3`, reemplazo atómico y `systemctl restart` (confirmación
+explícita de Matías). 0 migraciones nuevas que aplicar (Fase F no agrega tablas). Smoke test contra
+`http://127.0.0.1:8020` sin regresión: `/api/status` y `/api/waitlist/count` en `200`,
+`/api/session/me` en `401` como siempre; `GET /api/account/characters` (ruta nueva) responde `401`
+también — confirma que la ruta está activa, no `404`. Logs de arranque limpios.
+
+**A propósito, sin resolver todavía en este deploy — el feature no funciona de punta a punta
+en producción hasta que se complete lo siguiente:**
+1. El game server de `xindeler-new-horizon` está deployado en el VPS pero con una **versión
+   vieja**, sin NH-79 — Matías priorizó una tarea nueva en ese repo para actualizarlo (ver su
+   backlog), después de la que ya está en curso ahí.
+2. `WEB_API_SERVICE_TOKEN` todavía no está en el `.env` de este servicio en el VPS (confirmado
+   por SSH, `grep` de las claves — el valor no se tocó desde acá). Tiene que ser el mismo valor
+   ya configurado del lado de `xindeler-auth`.
+3. `WEB_API_GAME_SERVER_PLAYER_API_URL` no está seteada — cae al default
+   `http://127.0.0.1:14005`, que hay que confirmar contra el puerto real que use el game server
+   nuevo en producción.
+4. El riesgo de topología (el game server es loopback-only por NH-75, necesita compartir host con
+   este servicio) sigue sin resolver.
+
+Hasta que se resuelvan 1-4, `GET/POST /api/account/characters*` va a devolver error ante cualquier
+llamada real — esperado y aceptado por Matías para este deploy ("por ahora cuando se quiera
+consumir ese servicio va a tirar error").
 
 ---
 
