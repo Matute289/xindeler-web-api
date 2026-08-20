@@ -11,6 +11,7 @@ mod game_server_client;
 mod http;
 mod mailer;
 mod migrate_csv;
+mod privacy;
 mod ratelimit;
 mod session;
 mod state;
@@ -43,6 +44,28 @@ fn main() {
                 std::path::Path::new(waitlist_csv),
                 std::path::Path::new(contributors_csv),
             );
+        }
+        Some("delete-request") => {
+            let email = args.get(2).unwrap_or_else(|| {
+                panic!(
+                    "usage: {} delete-request <email> [--confirm <email>]",
+                    args[0]
+                )
+            });
+            let confirm = match args.get(3).map(String::as_str) {
+                Some("--confirm") => Some(args.get(4).unwrap_or_else(|| {
+                    panic!(
+                        "usage: {} delete-request <email> --confirm <email>",
+                        args[0]
+                    )
+                })),
+                Some(other) => panic!(
+                    "unknown flag {other:?} — usage: {} delete-request <email> [--confirm <email>]",
+                    args[0]
+                ),
+                None => None,
+            };
+            privacy::run(email, confirm.map(String::as_str));
         }
         _ => {}
     }
