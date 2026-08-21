@@ -10,7 +10,8 @@ use sha2::{Digest, Sha256};
 use std::net::IpAddr;
 use xindeler_auth_common::AuthToken;
 use xindeler_web_api_common::{
-    LoginPayload, LoginTotpChallengeResponse, LoginTotpRequest, MeResponse, OkResponse,
+    LoginPayload, LoginTotpChallengeResponse, LoginTotpRequest, MeResponse, OAuthSessionPayload,
+    OkResponse,
 };
 
 const SESSION_COOKIE: &str = "session";
@@ -220,6 +221,29 @@ pub fn login(body: &[u8], remote_ip: IpAddr, state: &AppState) -> Result<Respons
         })
         .with_status_code(202)),
     }
+}
+
+/// Exchanges a raw `AuthToken` minted by `xindeler-auth`'s OAuth flow (the
+/// callback's direct `#token=...` case, or the token returned by
+/// `/oauth/confirm-registration`) for a session cookie. Shares `login()`'s
+/// rate limit — same "establish a session by presenting a credential"
+/// semantics, and `verify()` doesn't care how the token was issued.
+pub fn oauth_login(body: &[u8], remote_ip: IpAddr, state: &AppState) -> Result<Response, ApiError> {
+    let payload: OAuthSessionPayload = serde_json::from_slice(body)?;
+    if payload.token.trim().is_empty() {
+        return Err(ApiError::InvalidRequest("token is required".into()));
+    }
+
+    if !state.login_requests.check(remote_ip) {
+        return Err(ApiError::RateLimit);
+    }
+
+    let token: AuthToken = payload
+        .token
+        .parse()
+        .map_err(|_| ApiError::InvalidRequest("token is malformed".into()))?;
+
+    create_session(token, String::new(), false, state)
 }
 
 pub fn login_2fa(body: &[u8], state: &AppState) -> Result<Response, ApiError> {

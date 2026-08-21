@@ -405,6 +405,51 @@ fn login_sets_a_session_cookie_that_me_and_logout_respect() {
 }
 
 #[test]
+fn oauth_endpoint_sets_a_session_cookie_from_a_raw_token() {
+    // No /generate_token stub needed here — oauth_login() never calls
+    // sign_in(), it goes straight from the client-supplied token to
+    // verify(), same as login_2fa() does with its challenge-redeemed token.
+    let auth = FakeAuthServer::start(&[VERIFY_OK]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/session/oauth"))
+        .json(&json!({"token": "0123456789abcdef0123456789abcdef"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let set_cookie = response
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(set_cookie.starts_with("session="));
+    assert!(set_cookie.contains("HttpOnly"));
+}
+
+#[test]
+fn oauth_endpoint_rejects_a_malformed_token() {
+    let auth = FakeAuthServer::start(&[VERIFY_OK]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/session/oauth"))
+        .json(&json!({"token": "not-hex"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 422);
+    assert!(response.headers().get("set-cookie").is_none());
+}
+
+#[test]
 fn invalid_credentials_return_401_without_setting_a_cookie() {
     let auth = FakeAuthServer::start(&[("/generate_token", 401, "{}"), ("/verify", 200, "{}")]);
     let server = TestServer::start_with(&[

@@ -109,6 +109,9 @@ fn dispatch(request: &Request, state: &AppState, network: &NetworkConfig) -> Res
         ("POST", "/api/session/login/2fa") => take_request_data(request)
             .and_then(|body| session::login_2fa(body, state))
             .unwrap_or_else(error::response),
+        ("POST", "/api/session/oauth") => take_request_data(request)
+            .and_then(|body| session::oauth_login(body, remote_ip, state))
+            .unwrap_or_else(error::response),
         ("GET", "/api/session/me") => session::me(request).unwrap_or_else(error::response),
         ("POST", "/api/session/logout") => session::logout(request).unwrap_or_else(error::response),
         ("GET", "/api/account/check-username") => {
