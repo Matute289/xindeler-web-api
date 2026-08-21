@@ -69,6 +69,17 @@ pub struct LoginTotpChallengeResponse {
     pub expires_in: u64,
 }
 
+/// `POST /api/session/oauth` — exchanges a raw `AuthToken` minted by
+/// `xindeler-auth`'s OAuth flow (either the callback's direct `#token=...`
+/// case, or the token returned by `/oauth/confirm-registration`) for a
+/// session cookie. Same redemption path as password login's `Token` branch —
+/// `xindeler-auth`'s `verify()` doesn't distinguish how the token was
+/// issued.
+#[derive(Debug, Deserialize)]
+pub struct OAuthSessionPayload {
+    pub token: String,
+}
+
 /// `POST /api/session/login/2fa` — no session cookie required, the
 /// `challenge_id` from `LoginTotpChallengeResponse` is the credential.
 #[derive(Debug, Deserialize)]
