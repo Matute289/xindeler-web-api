@@ -122,6 +122,13 @@ struct AccountLoginLockedBody {
 /// moderation ban) joins this list too: `sign_in()`'s `403` handling below
 /// tags it with this code specifically so it doesn't collapse into the same
 /// generic invalid-login copy as a plain wrong password.
+///
+/// `INVALID_EMAIL`, `INVALID_TOKEN` and `ACCOUNT_EXPIRED` join this list for
+/// the register/recovery proxies (`register`, `verify_email`,
+/// `set_account_email`, `resend_verification`): `AuthModal`'s
+/// `legacyErrorMessage()` already branches on all three today against
+/// xindeler-auth's direct responses, and needs the same codes once those
+/// calls go through this proxy instead of collapsing to a generic message.
 pub fn should_forward_verbatim(code: &str) -> bool {
     matches!(
         code,
@@ -135,6 +142,9 @@ pub fn should_forward_verbatim(code: &str) -> bool {
             | "USERNAME_RESERVED"
             | "USERNAME_CHANGE_COOLDOWN"
             | "ACCOUNT_NOT_ACTIVE"
+            | "INVALID_EMAIL"
+            | "INVALID_TOKEN"
+            | "ACCOUNT_EXPIRED"
     )
 }
 
