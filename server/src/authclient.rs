@@ -14,10 +14,11 @@ use uuid::Uuid;
 use xindeler_auth_common::{
     AuthToken, ChallengeId, ChangePasswordPayload, ChangeUsernamePayload,
     CharacterAccessTokenResponse, DeleteAccountPayload, EmailVerificationRequiredResponse,
-    ForgotPasswordPayload, IssueCharacterAccessTokenPayload, ResetPasswordPayload, SignInPayload,
-    SignInResponse, TotpBackupCodesResponse, TotpChallengeResponse, TotpCodePayload,
-    TotpEnrollPayload, TotpEnrollResponse, TotpLoginPayload, UsernameAvailabilityResponse,
-    ValidityCheckPayload, ValidityCheckResponse,
+    ForgotPasswordPayload, IssueCharacterAccessTokenPayload, RegisterPayload,
+    ResetPasswordPayload, SetAccountEmailPayload, SignInPayload, SignInResponse,
+    TotpBackupCodesResponse, TotpChallengeResponse, TotpCodePayload, TotpEnrollPayload,
+    TotpEnrollResponse, TotpLoginPayload, UsernameAvailabilityResponse, ValidityCheckPayload,
+    ValidityCheckResponse,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -495,6 +496,95 @@ impl AuthClient {
             .client
             .post(format!("{}/reset-password", self.base_url))
             .json(&payload)
+            .send()?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(rejection_with_body(status.as_u16(), response));
+        }
+        Ok(())
+    }
+
+    /// No service token — same public, rate-limited-by-IP tier as
+    /// `check_username`/`forgot_password`. `password_prehash` must already
+    /// be prehashed, same as every other mutable call in this module.
+    /// xindeler-auth answers 200 both on a genuinely new registration and on
+    /// an already-used email (anti-enumeration, same reasoning as
+    /// `forgot_password`'s uniform response) — a rejection here always means
+    /// the request itself was invalid (bad username, reserved name, ...).
+    pub fn register(
+        &self,
+        username: &str,
+        password_prehash: &str,
+        email: Option<&str>,
+    ) -> Result<(), AuthClientError> {
+        let payload = RegisterPayload {
+            username: username.to_owned(),
+            password: password_prehash.to_owned(),
+            email: email.map(str::to_owned),
+        };
+        let response = self
+            .client
+            .post(format!("{}/register", self.base_url))
+            .json(&payload)
+            .send()?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(rejection_with_body(status.as_u16(), response));
+        }
+        Ok(())
+    }
+
+    /// `GET /verify-email?token=`, reached from the emailed verification
+    /// link. No service token — same public tier as the rest of this
+    /// section.
+    pub fn verify_email(&self, token: &str) -> Result<(), AuthClientError> {
+        let encoded = utf8_percent_encode(token, NON_ALPHANUMERIC);
+        let response = self
+            .client
+            .get(format!("{}/verify-email?token={encoded}", self.base_url))
+            .send()?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(rejection_with_body(status.as_u16(), response));
+        }
+        Ok(())
+    }
+
+    /// Legacy account-recovery flow (see `AuthModal`'s `legacyModal`):
+    /// `completion_token` is the short-lived bearer credential
+    /// xindeler-auth issues alongside a `403 EMAIL_VERIFICATION_REQUIRED`
+    /// login rejection — never a session cookie, and never
+    /// `service_token`/`character_service_token` either (those are this
+    /// service's own credentials, not the caller's).
+    pub fn set_account_email(
+        &self,
+        completion_token: &str,
+        email: &str,
+    ) -> Result<(), AuthClientError> {
+        let payload = SetAccountEmailPayload {
+            email: email.to_owned(),
+        };
+        let response = self
+            .client
+            .post(format!("{}/account-email", self.base_url))
+            .bearer_auth(completion_token)
+            .json(&payload)
+            .send()?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(rejection_with_body(status.as_u16(), response));
+        }
+        Ok(())
+    }
+
+    /// Same `completion_token` credential as `set_account_email` above.
+    /// xindeler-auth's `/resend-verification` reads no body at all, only
+    /// the bearer token.
+    pub fn resend_verification(&self, completion_token: &str) -> Result<(), AuthClientError> {
+        let response = self
+            .client
+            .post(format!("{}/resend-verification", self.base_url))
+            .bearer_auth(completion_token)
             .send()?;
         let status = response.status();
         if !status.is_success() {
