@@ -51,6 +51,9 @@ fn map_account_error(err: AuthClientError) -> ApiError {
         // authclient.rs) — none of the calls this maps errors for call
         // either. Unreachable in practice, kept for exhaustiveness.
         AuthClientError::EmailVerificationRequired(_) => ApiError::InvalidCredentials,
+        // Only sign_in() ever produces this variant (G-08) — same note as
+        // EmailVerificationRequired above. Unreachable in practice.
+        AuthClientError::AccountLoginLocked { .. } => ApiError::InvalidCredentials,
     }
 }
 
@@ -83,6 +86,9 @@ fn map_recovery_error(err: AuthClientError) -> ApiError {
         // forgot_password/reset_password never call sign_in()/totp_login()
         // either — see map_account_error above for the same note.
         AuthClientError::EmailVerificationRequired(_) => {
+            ApiError::InvalidRequest("xindeler-auth rejected the request".into())
+        }
+        AuthClientError::AccountLoginLocked { .. } => {
             ApiError::InvalidRequest("xindeler-auth rejected the request".into())
         }
     }
@@ -408,6 +414,7 @@ fn map_character_token_error(err: AuthClientError) -> ApiError {
             ApiError::InternalServerError
         }
         AuthClientError::EmailVerificationRequired(_) => ApiError::InternalServerError,
+        AuthClientError::AccountLoginLocked { .. } => ApiError::InternalServerError,
     }
 }
 

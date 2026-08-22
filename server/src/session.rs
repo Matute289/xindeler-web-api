@@ -16,6 +16,21 @@ use xindeler_web_api_common::{
 
 const SESSION_COOKIE: &str = "session";
 
+/// Wire shape for `AuthClientError::AccountLoginLocked` (G-08), forwarded
+/// verbatim from `login()` — same "the frontend needs the real deadline"
+/// reasoning as the legacy `EmailVerificationRequiredResponse` forward
+/// above it. Declared locally rather than reusing xindeler-auth-common's
+/// `AccountLoginLockedResponse`: that type is `Serialize`-only there (it's
+/// built server-side, never consumed), so it can't round-trip through
+/// `AuthClientError::AccountLoginLocked`'s already-deserialized fields.
+#[derive(serde::Serialize)]
+struct LoginLockedResponse<'a> {
+    code: &'a str,
+    message: &'a str,
+    request_id: String,
+    locked_until: i64,
+}
+
 /// 7 days, absolute — no sliding renewal. A player who wants to stay logged
 /// in longer just logs in again; this bounds how long a stolen cookie stays
 /// useful without needing a revocation list beyond `sessions.revoked_at`.
@@ -101,9 +116,11 @@ fn map_sign_in_error(err: AuthClientError) -> ApiError {
         // verify() would see) with 400, not 401 — confirmed against the
         // real, deployed service during the B-05 smoke test, not assumed
         // from the wire-type names. 403 stays here too, as the fallback for
-        // an EMAIL_VERIFICATION_REQUIRED-shaped 403 whose body didn't parse
-        // (login() intercepts the well-formed case before this function
-        // ever runs — see AuthClientError::EmailVerificationRequired).
+        // an EMAIL_VERIFICATION_REQUIRED- or ACCOUNT_NOT_ACTIVE-shaped 403
+        // whose body didn't parse (login() intercepts both well-formed
+        // cases before this function ever runs — see
+        // AuthClientError::EmailVerificationRequired and the
+        // should_forward_verbatim guard on AuthClientError::RejectedWithBody).
         AuthClientError::RejectedWithBody { status, .. }
             if status == 400 || status == 401 || status == 403 =>
         {
@@ -136,6 +153,10 @@ fn map_sign_in_error(err: AuthClientError) -> ApiError {
         // to special-case it — falls back to the same generic 401 as any
         // other rejected credential.
         AuthClientError::EmailVerificationRequired(_) => ApiError::InvalidCredentials,
+        // login() intercepts this variant too, same reasoning as
+        // EmailVerificationRequired above; verify() never produces it
+        // either. Kept for exhaustiveness with the same generic fallback.
+        AuthClientError::AccountLoginLocked { .. } => ApiError::InvalidCredentials,
     }
 }
 
@@ -202,6 +223,30 @@ pub fn login(body: &[u8], remote_ip: IpAddr, state: &AppState) -> Result<Respons
         // completion_token/deadline shape xindeler-auth already returns.
         Err(AuthClientError::EmailVerificationRequired(body)) => {
             return Ok(Response::json(&body).with_status_code(403));
+        }
+        Err(AuthClientError::AccountLoginLocked {
+            message,
+            locked_until,
+        }) => {
+            return Ok(Response::json(&LoginLockedResponse {
+                code: "ACCOUNT_LOGIN_LOCKED",
+                message: &message,
+                request_id: hex::encode(rand::random::<[u8; 8]>()),
+                locked_until,
+            })
+            .with_status_code(423));
+        }
+        // ACCOUNT_NOT_ACTIVE (G-08's permanent-lockout tier, or any other
+        // moderation ban) — forwarded the same way login_2fa() already
+        // forwards its own verbatim codes below, so it doesn't collapse
+        // into the generic invalid-login copy map_sign_in_error would give
+        // every other 403.
+        Err(AuthClientError::RejectedWithBody {
+            status,
+            code,
+            message,
+        }) if should_forward_verbatim(&code) => {
+            return Ok(error::forwarded_response(status, code, message));
         }
         Err(err) => return Err(map_sign_in_error(err)),
     };

@@ -33,6 +33,15 @@ pub enum AuthClientError {
     /// collapsing it via `map_sign_in_error`), because the frontend's legacy
     /// recovery modal needs `completion_token`/`deadline` to keep working.
     EmailVerificationRequired(EmailVerificationRequiredResponse),
+    /// `sign_in()` specifically: xindeler-auth rejected the login with a
+    /// `423 ACCOUNT_LOGIN_LOCKED` (G-08 — three wrong passwords in a row).
+    /// Forwarded verbatim like `EmailVerificationRequired` above, for the
+    /// same reason: the frontend needs the exact `locked_until` timestamp to
+    /// show a real countdown, not just a generic message.
+    AccountLoginLocked {
+        message: String,
+        locked_until: i64,
+    },
     /// xindeler-auth answered with a status outside 200-299. Carries its own
     /// `code`/`message` (parsed from the response body when it's shaped
     /// like `{code, message, request_id}` — every rejection from that
@@ -81,6 +90,18 @@ struct RemoteErrorBody {
     message: String,
 }
 
+/// xindeler-auth's `AccountLoginLockedResponse` (G-08), redeclared locally —
+/// same reasoning as `RemoteErrorBody` above: that type is `Serialize`-only
+/// in `xindeler-auth-common` (it's built server-side there, never consumed),
+/// so this service needs its own `Deserialize` shape to read `locked_until`
+/// back off the wire.
+#[derive(Deserialize)]
+struct AccountLoginLockedBody {
+    code: String,
+    message: String,
+    locked_until: i64,
+}
+
 /// Codes callers should forward verbatim (via `error::forwarded_response`)
 /// instead of collapsing through their usual generic status-based error
 /// mapping — the frontend needs to tell these apart from a plain
@@ -96,6 +117,11 @@ struct RemoteErrorBody {
 /// recently — confirmed reading `auth::change_username` in xindeler-auth,
 /// not assumed), and only the first of those is genuinely
 /// `INVALID_CREDENTIALS`.
+///
+/// `ACCOUNT_NOT_ACTIVE` (G-08's permanent-lockout tier, or any other
+/// moderation ban) joins this list too: `sign_in()`'s `403` handling below
+/// tags it with this code specifically so it doesn't collapse into the same
+/// generic invalid-login copy as a plain wrong password.
 pub fn should_forward_verbatim(code: &str) -> bool {
     matches!(
         code,
@@ -108,6 +134,7 @@ pub fn should_forward_verbatim(code: &str) -> bool {
             | "USERNAME_UNAVAILABLE"
             | "USERNAME_RESERVED"
             | "USERNAME_CHANGE_COOLDOWN"
+            | "ACCOUNT_NOT_ACTIVE"
     )
 }
 
@@ -188,14 +215,49 @@ impl AuthClient {
             });
         }
         if !status.is_success() {
-            // 403 is the one rejection worth inspecting before falling back
-            // to the generic path: it's the only status xindeler-auth uses
-            // for EMAIL_VERIFICATION_REQUIRED, and any other shape on a 403
-            // (or a body that fails to parse) just falls through.
+            // 423 is G-08's temporary lockout (three wrong passwords in a
+            // row) — the only status that carries `locked_until`, so it gets
+            // its own typed parse same as the 403 case below.
+            if status.as_u16() == 423 {
+                if let Ok(body) = response.json::<AccountLoginLockedBody>() {
+                    if body.code == "ACCOUNT_LOGIN_LOCKED" {
+                        return Err(AuthClientError::AccountLoginLocked {
+                            message: body.message,
+                            locked_until: body.locked_until,
+                        });
+                    }
+                }
+                return Err(AuthClientError::RejectedWithBody {
+                    status: 423,
+                    code: String::new(),
+                    message: String::new(),
+                });
+            }
+            // 403 is worth inspecting before falling back to the generic
+            // path: xindeler-auth uses it both for EMAIL_VERIFICATION_REQUIRED
+            // (needs its own typed shape, deadline/completion_token) and for
+            // ACCOUNT_NOT_ACTIVE (G-08's permanent-lockout tier, or any other
+            // moderation ban — just needs its code forwarded so the frontend
+            // doesn't show the same copy as a wrong password). Read the body
+            // once as bytes since it can only be consumed a single time, then
+            // try each shape against that buffer. Any other shape (or a body
+            // that fails to parse at all) falls through to the generic case.
             if status.as_u16() == 403 {
-                if let Ok(body) = response.json::<EmailVerificationRequiredResponse>() {
+                let bytes = response.bytes().unwrap_or_default();
+                if let Ok(body) =
+                    serde_json::from_slice::<EmailVerificationRequiredResponse>(&bytes)
+                {
                     if body.code == "EMAIL_VERIFICATION_REQUIRED" {
                         return Err(AuthClientError::EmailVerificationRequired(body));
+                    }
+                }
+                if let Ok(body) = serde_json::from_slice::<RemoteErrorBody>(&bytes) {
+                    if body.code == "ACCOUNT_NOT_ACTIVE" {
+                        return Err(AuthClientError::RejectedWithBody {
+                            status: 403,
+                            code: body.code,
+                            message: body.message,
+                        });
                     }
                 }
                 return Err(AuthClientError::RejectedWithBody {
