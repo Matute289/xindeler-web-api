@@ -531,6 +531,58 @@ fn login_treats_an_unparseable_403_body_as_generic_invalid_credentials() {
     assert_eq!(body_json(response)["code"], "INVALID_CREDENTIALS");
 }
 
+#[test]
+fn login_forwards_account_login_locked_verbatim() {
+    // G-08: three wrong passwords in a row locks the account for an hour.
+    // The frontend needs `locked_until` to show a real countdown instead of
+    // the generic invalid-credentials copy.
+    let auth = FakeAuthServer::start(&[(
+        "/generate_token",
+        423,
+        r#"{"code":"ACCOUNT_LOGIN_LOCKED","message":"This account is temporarily locked after repeated failed login attempts.","request_id":"abc123","locked_until":1999999999}"#,
+    )]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/session/login"))
+        .json(&json!({"username": "lockeduser", "password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 423);
+    assert!(response.headers().get("set-cookie").is_none());
+    let body = body_json(response);
+    assert_eq!(body["code"], "ACCOUNT_LOGIN_LOCKED");
+    assert_eq!(body["locked_until"], 1999999999);
+}
+
+#[test]
+fn login_forwards_account_not_active_verbatim() {
+    // G-08's permanent-lockout tier (or any other moderation ban) answers
+    // 403 ACCOUNT_NOT_ACTIVE — must not collapse into the generic
+    // invalid-credentials copy a plain wrong password gets.
+    let auth = FakeAuthServer::start(&[(
+        "/generate_token",
+        403,
+        r#"{"code":"ACCOUNT_NOT_ACTIVE","message":"This account cannot log in right now.","request_id":"abc123","account_state":"banned"}"#,
+    )]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/session/login"))
+        .json(&json!({"username": "banneduser", "password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 403);
+    assert!(response.headers().get("set-cookie").is_none());
+    assert_eq!(body_json(response)["code"], "ACCOUNT_NOT_ACTIVE");
+}
+
 // --- C-02: /api/account/* proxy tests ---
 
 #[test]
