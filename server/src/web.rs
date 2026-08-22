@@ -117,6 +117,18 @@ fn dispatch(request: &Request, state: &AppState, network: &NetworkConfig) -> Res
         ("GET", "/api/account/check-username") => {
             account::check_username(request, state).unwrap_or_else(error::response)
         }
+        ("POST", "/api/account/register") => take_request_data(request)
+            .and_then(|body| account::register(body, state))
+            .unwrap_or_else(error::response),
+        ("GET", "/api/account/verify-email") => {
+            account::verify_email(request, state).unwrap_or_else(error::response)
+        }
+        ("POST", "/api/account/account-email") => take_request_data(request)
+            .and_then(|body| account::account_email(body, state))
+            .unwrap_or_else(error::response),
+        ("POST", "/api/account/resend-verification") => take_request_data(request)
+            .and_then(|body| account::resend_verification(body, state))
+            .unwrap_or_else(error::response),
         ("POST", "/api/account/change-username") => take_request_data(request)
             .and_then(|body| account::change_username(body, request, state))
             .unwrap_or_else(error::response),
