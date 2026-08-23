@@ -124,12 +124,19 @@ struct AccountLoginLockedBody {
 /// tags it with this code specifically so it doesn't collapse into the same
 /// generic invalid-login copy as a plain wrong password.
 ///
-/// `INVALID_EMAIL`, `INVALID_TOKEN` and `ACCOUNT_EXPIRED` join this list for
-/// the register/recovery proxies (`register`, `verify_email`,
-/// `set_account_email`, `resend_verification`): `AuthModal`'s
-/// `legacyErrorMessage()` already branches on all three today against
-/// xindeler-auth's direct responses, and needs the same codes once those
-/// calls go through this proxy instead of collapsing to a generic message.
+/// Deliberately does **not** include `INVALID_EMAIL`/`INVALID_TOKEN`/
+/// `ACCOUNT_EXPIRED` — those belong to `should_forward_recovery_verbatim`
+/// below. A code-review pass on the register/recovery proxy PR originally
+/// added them here instead, which would have also forwarded them verbatim
+/// from `change_username`/`delete_account`/`2fa/*` and `session::login(_2fa)`
+/// — checked against xindeler-auth's real source (not assumed): none of
+/// those call sites can actually produce any of the three today (confirmed
+/// reading `auth.rs`: `ACCOUNT_EXPIRED` only comes from `generate_token`
+/// (login) and the recovery proxies; `INVALID_TOKEN`/`INVALID_EMAIL` only
+/// from `verify_email`/`set_account_email`/`register`/`reset_password`,
+/// none of which route through this function), but keeping them out of the
+/// shared list is what makes that true by construction instead of by
+/// coincidence.
 pub fn should_forward_verbatim(code: &str) -> bool {
     matches!(
         code,
@@ -143,10 +150,21 @@ pub fn should_forward_verbatim(code: &str) -> bool {
             | "USERNAME_RESERVED"
             | "USERNAME_CHANGE_COOLDOWN"
             | "ACCOUNT_NOT_ACTIVE"
-            | "INVALID_EMAIL"
-            | "INVALID_TOKEN"
-            | "ACCOUNT_EXPIRED"
     )
+}
+
+/// The register/recovery proxies' own verbatim list — everything
+/// `should_forward_verbatim` already covers (`register` can still fail with
+/// `USERNAME_UNAVAILABLE`/`USERNAME_RESERVED`, confirmed reading
+/// `auth::register` in xindeler-auth), plus `INVALID_EMAIL`/`INVALID_TOKEN`/
+/// `ACCOUNT_EXPIRED`: `AuthModal`'s `legacyErrorMessage()` already branches
+/// on all three today against xindeler-auth's direct responses, and needs
+/// the same codes once those calls go through this proxy instead of
+/// collapsing to a generic message. Used only by `register`/`verify_email`/
+/// `set_account_email`/`resend_verification` in `account.rs`.
+pub fn should_forward_recovery_verbatim(code: &str) -> bool {
+    should_forward_verbatim(code)
+        || matches!(code, "INVALID_EMAIL" | "INVALID_TOKEN" | "ACCOUNT_EXPIRED")
 }
 
 impl From<reqwest::Error> for AuthClientError {
@@ -201,6 +219,23 @@ impl AuthClient {
         }
     }
 
+    /// `path` starts with `/`. Every outbound call goes through this (or
+    /// `get` below) specifically so `X-Real-IP` (D-03) can never be added to
+    /// one call and forgotten on the next — one place sets it, all 18
+    /// methods below inherit it instead of repeating the same
+    /// `.header("X-Real-IP", ...)` line.
+    fn post(&self, path: &str, caller_ip: IpAddr) -> reqwest::blocking::RequestBuilder {
+        self.client
+            .post(format!("{}{path}", self.base_url))
+            .header("X-Real-IP", caller_ip.to_string())
+    }
+
+    fn get(&self, path: &str, caller_ip: IpAddr) -> reqwest::blocking::RequestBuilder {
+        self.client
+            .get(format!("{}{path}", self.base_url))
+            .header("X-Real-IP", caller_ip.to_string())
+    }
+
     /// `password_prehash` must already be the client-side prehash — never a
     /// raw password (see module docs). `caller_ip` is forwarded as
     /// `X-Real-IP` (D-03) so xindeler-auth's own per-IP rate limit sees the
@@ -216,9 +251,7 @@ impl AuthClient {
             password: password_prehash.to_owned(),
         };
         let response = self
-            .client
-            .post(format!("{}/generate_token", self.base_url))
-            .header("X-Real-IP", caller_ip.to_string())
+            .post("/generate_token", caller_ip)
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -302,12 +335,7 @@ impl AuthClient {
             challenge_id,
             code: code.to_owned(),
         };
-        let response = self
-            .client
-            .post(format!("{}/login/2fa", self.base_url))
-            .header("X-Real-IP", caller_ip.to_string())
-            .json(&payload)
-            .send()?;
+        let response = self.post("/login/2fa", caller_ip).json(&payload).send()?;
         let status = response.status();
         if !status.is_success() {
             return Err(rejection_with_body(status.as_u16(), response));
@@ -330,10 +358,8 @@ impl AuthClient {
             .ok_or(AuthClientError::MissingServiceToken)?;
         let payload = ValidityCheckPayload { token };
         let response = self
-            .client
-            .post(format!("{}/verify", self.base_url))
+            .post("/verify", caller_ip)
             .bearer_auth(service_token)
-            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -362,10 +388,8 @@ impl AuthClient {
             .ok_or(AuthClientError::MissingCharacterServiceToken)?;
         let payload = IssueCharacterAccessTokenPayload { uuid };
         let response = self
-            .client
-            .post(format!("{}/issue-character-access-token", self.base_url))
+            .post("/issue-character-access-token", caller_ip)
             .bearer_auth(character_service_token)
-            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -387,12 +411,7 @@ impl AuthClient {
     ) -> Result<bool, AuthClientError> {
         let encoded = utf8_percent_encode(username, NON_ALPHANUMERIC);
         let response = self
-            .client
-            .get(format!(
-                "{}/check-username?username={encoded}",
-                self.base_url
-            ))
-            .header("X-Real-IP", caller_ip.to_string())
+            .get(&format!("/check-username?username={encoded}"), caller_ip)
             .send()?;
         let status = response.status();
         if !status.is_success() {
@@ -421,9 +440,7 @@ impl AuthClient {
             code: code.map(str::to_owned),
         };
         let response = self
-            .client
-            .post(format!("{}/change_username", self.base_url))
-            .header("X-Real-IP", caller_ip.to_string())
+            .post("/change_username", caller_ip)
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -450,9 +467,7 @@ impl AuthClient {
             new_password: new_password_prehash.to_owned(),
         };
         let response = self
-            .client
-            .post(format!("{}/change_password", self.base_url))
-            .header("X-Real-IP", caller_ip.to_string())
+            .post("/change_password", caller_ip)
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -475,9 +490,7 @@ impl AuthClient {
             code: code.map(str::to_owned),
         };
         let response = self
-            .client
-            .post(format!("{}/delete_account", self.base_url))
-            .header("X-Real-IP", caller_ip.to_string())
+            .post("/delete_account", caller_ip)
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -496,9 +509,7 @@ impl AuthClient {
             email: email.to_owned(),
         };
         let response = self
-            .client
-            .post(format!("{}/forgot-password", self.base_url))
-            .header("X-Real-IP", caller_ip.to_string())
+            .post("/forgot-password", caller_ip)
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -519,9 +530,7 @@ impl AuthClient {
             new_password: new_password_prehash.to_owned(),
         };
         let response = self
-            .client
-            .post(format!("{}/reset-password", self.base_url))
-            .header("X-Real-IP", caller_ip.to_string())
+            .post("/reset-password", caller_ip)
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -550,12 +559,7 @@ impl AuthClient {
             password: password_prehash.to_owned(),
             email: email.map(str::to_owned),
         };
-        let response = self
-            .client
-            .post(format!("{}/register", self.base_url))
-            .header("X-Real-IP", caller_ip.to_string())
-            .json(&payload)
-            .send()?;
+        let response = self.post("/register", caller_ip).json(&payload).send()?;
         let status = response.status();
         if !status.is_success() {
             return Err(rejection_with_body(status.as_u16(), response));
@@ -569,9 +573,7 @@ impl AuthClient {
     pub fn verify_email(&self, caller_ip: IpAddr, token: &str) -> Result<(), AuthClientError> {
         let encoded = utf8_percent_encode(token, NON_ALPHANUMERIC);
         let response = self
-            .client
-            .get(format!("{}/verify-email?token={encoded}", self.base_url))
-            .header("X-Real-IP", caller_ip.to_string())
+            .get(&format!("/verify-email?token={encoded}"), caller_ip)
             .send()?;
         let status = response.status();
         if !status.is_success() {
@@ -596,10 +598,8 @@ impl AuthClient {
             email: email.to_owned(),
         };
         let response = self
-            .client
-            .post(format!("{}/account-email", self.base_url))
+            .post("/account-email", caller_ip)
             .bearer_auth(completion_token)
-            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -618,10 +618,8 @@ impl AuthClient {
         completion_token: &str,
     ) -> Result<(), AuthClientError> {
         let response = self
-            .client
-            .post(format!("{}/resend-verification", self.base_url))
+            .post("/resend-verification", caller_ip)
             .bearer_auth(completion_token)
-            .header("X-Real-IP", caller_ip.to_string())
             .send()?;
         let status = response.status();
         if !status.is_success() {
@@ -646,12 +644,7 @@ impl AuthClient {
             username: username.to_owned(),
             password: password_prehash.to_owned(),
         };
-        let response = self
-            .client
-            .post(format!("{}/2fa/enroll", self.base_url))
-            .header("X-Real-IP", caller_ip.to_string())
-            .json(&payload)
-            .send()?;
+        let response = self.post("/2fa/enroll", caller_ip).json(&payload).send()?;
         let status = response.status();
         if !status.is_success() {
             return Err(rejection_with_body(status.as_u16(), response));
@@ -671,12 +664,7 @@ impl AuthClient {
             password: password_prehash.to_owned(),
             code: code.to_owned(),
         };
-        let response = self
-            .client
-            .post(format!("{}/2fa/confirm", self.base_url))
-            .header("X-Real-IP", caller_ip.to_string())
-            .json(&payload)
-            .send()?;
+        let response = self.post("/2fa/confirm", caller_ip).json(&payload).send()?;
         let status = response.status();
         if !status.is_success() {
             return Err(rejection_with_body(status.as_u16(), response));
@@ -696,12 +684,7 @@ impl AuthClient {
             password: password_prehash.to_owned(),
             code: code.to_owned(),
         };
-        let response = self
-            .client
-            .post(format!("{}/2fa/disable", self.base_url))
-            .header("X-Real-IP", caller_ip.to_string())
-            .json(&payload)
-            .send()?;
+        let response = self.post("/2fa/disable", caller_ip).json(&payload).send()?;
         let status = response.status();
         if !status.is_success() {
             return Err(rejection_with_body(status.as_u16(), response));
@@ -722,9 +705,7 @@ impl AuthClient {
             code: code.to_owned(),
         };
         let response = self
-            .client
-            .post(format!("{}/2fa/backup-codes/regenerate", self.base_url))
-            .header("X-Real-IP", caller_ip.to_string())
+            .post("/2fa/backup-codes/regenerate", caller_ip)
             .json(&payload)
             .send()?;
         let status = response.status();

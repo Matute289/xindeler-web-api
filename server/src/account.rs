@@ -5,7 +5,9 @@
 //! backlog 007), which `xindeler-auth` itself has no way to do since it
 //! doesn't know this service's sessions exist.
 
-use crate::authclient::{should_forward_verbatim, AuthClientError};
+use crate::authclient::{
+    should_forward_recovery_verbatim, should_forward_verbatim, AuthClientError,
+};
 use crate::error::{self, ApiError};
 use crate::game_server_client::GameServerClientError;
 use crate::http::{Request, Response};
@@ -97,10 +99,15 @@ fn map_recovery_error(err: AuthClientError) -> ApiError {
 
 /// A TOTP-specific rejection (`TOTP_INVALID_CODE`, `ACCOUNT_2FA_LOCKED`,
 /// ...) is forwarded verbatim instead of collapsed through `mapper` — same
-/// reasoning as `EMAIL_VERIFICATION_REQUIRED` in `session::login`: the
-/// frontend needs the real code to show the right copy.
+/// reasoning as `EMAIL_VERIFICATION_REQUIRED` in `session::login`. `verbatim`
+/// is which allowlist applies: `should_forward_verbatim` for
+/// change_username/delete_account/2fa/*, `should_forward_recovery_verbatim`
+/// for the register/recovery proxies below — never hardcoded here, so a
+/// caller can't accidentally forward a code from the wrong family (see
+/// `should_forward_verbatim`'s doc comment for why that distinction exists).
 fn map_or_forward(
     err: AuthClientError,
+    verbatim: impl Fn(&str) -> bool,
     mapper: impl FnOnce(AuthClientError) -> ApiError,
 ) -> Result<Response, ApiError> {
     if let AuthClientError::RejectedWithBody {
@@ -109,7 +116,7 @@ fn map_or_forward(
         message,
     } = &err
     {
-        if should_forward_verbatim(code) {
+        if verbatim(code) {
             return Ok(error::forwarded_response(
                 *status,
                 code.clone(),
@@ -161,7 +168,7 @@ pub fn change_username(
         &payload.new_username,
         payload.code.as_deref(),
     ) {
-        return map_or_forward(err, map_account_error);
+        return map_or_forward(err, should_forward_verbatim, map_account_error);
     }
 
     // The session's cached username is now stale; revoke rather than patch
@@ -220,7 +227,7 @@ pub fn delete_account(
         &payload.password_prehash,
         payload.code.as_deref(),
     ) {
-        return map_or_forward(err, map_account_error);
+        return map_or_forward(err, should_forward_verbatim, map_account_error);
     }
 
     revoke_all_sessions(&identity.uuid)?;
@@ -302,7 +309,7 @@ pub fn register(body: &[u8], remote_ip: IpAddr, state: &AppState) -> Result<Resp
         &payload.password_prehash,
         payload.email.as_deref(),
     ) {
-        return map_or_forward(err, map_recovery_error);
+        return map_or_forward(err, should_forward_recovery_verbatim, map_recovery_error);
     }
 
     Ok(Response::json(&OkResponse { ok: true }))
@@ -321,7 +328,7 @@ pub fn verify_email(
         .ok_or_else(|| ApiError::InvalidRequest("token is required".into()))?;
 
     if let Err(err) = state.auth_client.verify_email(remote_ip, &token) {
-        return map_or_forward(err, map_recovery_error);
+        return map_or_forward(err, should_forward_recovery_verbatim, map_recovery_error);
     }
 
     Ok(Response::json(&OkResponse { ok: true }))
@@ -347,7 +354,7 @@ pub fn account_email(
             .auth_client
             .set_account_email(remote_ip, &payload.completion_token, &payload.email)
     {
-        return map_or_forward(err, map_recovery_error);
+        return map_or_forward(err, should_forward_recovery_verbatim, map_recovery_error);
     }
 
     Ok(Response::json(&OkResponse { ok: true }))
@@ -370,7 +377,7 @@ pub fn resend_verification(
         .auth_client
         .resend_verification(remote_ip, &payload.completion_token)
     {
-        return map_or_forward(err, map_recovery_error);
+        return map_or_forward(err, should_forward_recovery_verbatim, map_recovery_error);
     }
 
     Ok(Response::json(&OkResponse { ok: true }))
@@ -402,7 +409,7 @@ pub fn totp_enroll(
             otpauth_url: enrollment.otpauth_url,
             qr_png_base64: enrollment.qr_png_base64,
         })),
-        Err(err) => map_or_forward(err, map_account_error),
+        Err(err) => map_or_forward(err, should_forward_verbatim, map_account_error),
     }
 }
 
@@ -429,7 +436,7 @@ pub fn totp_confirm(
             totp_status::mark_confirmed(&identity.uuid)?;
             Ok(Response::json(&TotpBackupCodesResponse { backup_codes }))
         }
-        Err(err) => map_or_forward(err, map_account_error),
+        Err(err) => map_or_forward(err, should_forward_verbatim, map_account_error),
     }
 }
 
@@ -461,7 +468,7 @@ pub fn totp_disable(
             revoke_all_sessions(&identity.uuid)?;
             Ok(clear_cookie(Response::json(&OkResponse { ok: true })))
         }
-        Err(err) => map_or_forward(err, map_account_error),
+        Err(err) => map_or_forward(err, should_forward_verbatim, map_account_error),
     }
 }
 
@@ -485,7 +492,7 @@ pub fn totp_regenerate_backup_codes(
         &payload.code,
     ) {
         Ok(backup_codes) => Ok(Response::json(&TotpBackupCodesResponse { backup_codes })),
-        Err(err) => map_or_forward(err, map_account_error),
+        Err(err) => map_or_forward(err, should_forward_verbatim, map_account_error),
     }
 }
 

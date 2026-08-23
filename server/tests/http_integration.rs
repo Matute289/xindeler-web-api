@@ -12,7 +12,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -256,7 +256,7 @@ struct FakeAuthServer {
     /// The full raw text (request line + headers) of the last request this
     /// server received — read by `last_x_real_ip()` (D-03) to assert
     /// `authclient.rs` actually forwards the caller's real IP.
-    last_request: Arc<std::sync::Mutex<Option<String>>>,
+    last_request: Arc<Mutex<Option<String>>>,
 }
 
 impl FakeAuthServer {
@@ -268,7 +268,7 @@ impl FakeAuthServer {
         let addr = listener.local_addr().unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
-        let last_request = Arc::new(std::sync::Mutex::new(None));
+        let last_request = Arc::new(Mutex::new(None));
         let last_request_clone = Arc::clone(&last_request);
 
         let handle = thread::spawn(move || {
@@ -1333,6 +1333,41 @@ fn totp_backup_codes_regenerate_returns_new_codes() {
         body_json(response)["backup_codes"],
         json!(["cccc3333", "dddd4444"])
     );
+}
+
+#[test]
+fn change_username_does_not_forward_account_expired_verbatim() {
+    // D-03 code-review follow-up: ACCOUNT_EXPIRED belongs to
+    // should_forward_recovery_verbatim (register/verify-email/account-email/
+    // resend-verification only), never the plain should_forward_verbatim
+    // change_username/delete_account/2fa/* use -- this pins that boundary so
+    // a future edit can't silently widen it back.
+    let auth = FakeAuthServer::start(&[
+        SIGN_IN_OK,
+        VERIFY_OK,
+        (
+            "/change_username",
+            410,
+            r#"{"code":"ACCOUNT_EXPIRED","message":"The account verification period has expired.","request_id":"x"}"#,
+        ),
+    ]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .post(server.url("/api/account/change-username"))
+        .header("Cookie", &cookie)
+        .json(&json!({"new_username": "newname", "password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    // Collapsed through map_account_error's generic fallback (502
+    // UPSTREAM_ERROR), not forwarded as a 410 ACCOUNT_EXPIRED.
+    assert_eq!(response.status(), 502);
+    assert_eq!(body_json(response)["code"], "UPSTREAM_ERROR");
 }
 
 #[test]
