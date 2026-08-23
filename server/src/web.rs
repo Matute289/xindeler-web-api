@@ -107,7 +107,7 @@ fn dispatch(request: &Request, state: &AppState, network: &NetworkConfig) -> Res
             .and_then(|body| session::login(body, remote_ip, state))
             .unwrap_or_else(error::response),
         ("POST", "/api/session/login/2fa") => take_request_data(request)
-            .and_then(|body| session::login_2fa(body, state))
+            .and_then(|body| session::login_2fa(body, remote_ip, state))
             .unwrap_or_else(error::response),
         ("POST", "/api/session/oauth") => take_request_data(request)
             .and_then(|body| session::oauth_login(body, remote_ip, state))
@@ -115,54 +115,56 @@ fn dispatch(request: &Request, state: &AppState, network: &NetworkConfig) -> Res
         ("GET", "/api/session/me") => session::me(request).unwrap_or_else(error::response),
         ("POST", "/api/session/logout") => session::logout(request).unwrap_or_else(error::response),
         ("GET", "/api/account/check-username") => {
-            account::check_username(request, state).unwrap_or_else(error::response)
+            account::check_username(request, remote_ip, state).unwrap_or_else(error::response)
         }
         ("POST", "/api/account/register") => take_request_data(request)
-            .and_then(|body| account::register(body, state))
+            .and_then(|body| account::register(body, remote_ip, state))
             .unwrap_or_else(error::response),
         ("GET", "/api/account/verify-email") => {
-            account::verify_email(request, state).unwrap_or_else(error::response)
+            account::verify_email(request, remote_ip, state).unwrap_or_else(error::response)
         }
         ("POST", "/api/account/account-email") => take_request_data(request)
-            .and_then(|body| account::account_email(body, state))
+            .and_then(|body| account::account_email(body, remote_ip, state))
             .unwrap_or_else(error::response),
         ("POST", "/api/account/resend-verification") => take_request_data(request)
-            .and_then(|body| account::resend_verification(body, state))
+            .and_then(|body| account::resend_verification(body, remote_ip, state))
             .unwrap_or_else(error::response),
         ("POST", "/api/account/change-username") => take_request_data(request)
-            .and_then(|body| account::change_username(body, request, state))
+            .and_then(|body| account::change_username(body, request, remote_ip, state))
             .unwrap_or_else(error::response),
         ("POST", "/api/account/change-password") => take_request_data(request)
-            .and_then(|body| account::change_password(body, request, state))
+            .and_then(|body| account::change_password(body, request, remote_ip, state))
             .unwrap_or_else(error::response),
         ("POST", "/api/account/delete") => take_request_data(request)
-            .and_then(|body| account::delete_account(body, request, state))
+            .and_then(|body| account::delete_account(body, request, remote_ip, state))
             .unwrap_or_else(error::response),
         ("POST", "/api/account/forgot-password") => take_request_data(request)
-            .and_then(|body| account::forgot_password(body, state))
+            .and_then(|body| account::forgot_password(body, remote_ip, state))
             .unwrap_or_else(error::response),
         ("POST", "/api/account/reset-password") => take_request_data(request)
-            .and_then(|body| account::reset_password(body, request, state))
+            .and_then(|body| account::reset_password(body, request, remote_ip, state))
             .unwrap_or_else(error::response),
         ("POST", "/api/account/2fa/enroll") => take_request_data(request)
-            .and_then(|body| account::totp_enroll(body, request, state))
+            .and_then(|body| account::totp_enroll(body, request, remote_ip, state))
             .unwrap_or_else(error::response),
         ("POST", "/api/account/2fa/confirm") => take_request_data(request)
-            .and_then(|body| account::totp_confirm(body, request, state))
+            .and_then(|body| account::totp_confirm(body, request, remote_ip, state))
             .unwrap_or_else(error::response),
         ("POST", "/api/account/2fa/disable") => take_request_data(request)
-            .and_then(|body| account::totp_disable(body, request, state))
+            .and_then(|body| account::totp_disable(body, request, remote_ip, state))
             .unwrap_or_else(error::response),
         ("POST", "/api/account/2fa/backup-codes/regenerate") => take_request_data(request)
-            .and_then(|body| account::totp_regenerate_backup_codes(body, request, state))
+            .and_then(|body| account::totp_regenerate_backup_codes(body, request, remote_ip, state))
             .unwrap_or_else(error::response),
         ("GET", "/api/account/characters") => {
-            account::list_characters(request, state).unwrap_or_else(error::response)
+            account::list_characters(request, remote_ip, state).unwrap_or_else(error::response)
         }
         ("POST", path) if character_rename_path(path).is_some() => {
             match character_rename_path(path) {
                 Some(character_id) => take_request_data(request)
-                    .and_then(|body| account::rename_character(body, request, character_id, state))
+                    .and_then(|body| {
+                        account::rename_character(body, request, character_id, remote_ip, state)
+                    })
                     .unwrap_or_else(error::response),
                 None => Response::empty_404(),
             }

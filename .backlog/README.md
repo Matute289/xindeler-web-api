@@ -121,7 +121,7 @@ cookie de sesión válida. Total del repo: 56 tests (32 unitarios + 24 de integr
 |---|---|---|
 | D-01 | Env vars + proxy de Vite en `xindeler-web-landing` para desarrollo local real | `done` — `Matute289/xindeler-web-landing#41`. Las 5 llamadas same-origin (`waitlist`, `contribute`, `status`, `account/forgot-password`, `account/reset-password`) pasan de URL absoluta a ruta relativa `/api/...`; `vite.config.js` suma `server.proxy['/api']` con target configurable vía `VITE_API_PROXY_TARGET` (default: producción, mismo comportamiento de hoy) |
 | D-02 | `AuthModal.jsx` deja de descartar el resultado del login, primera versión de "hay alguien logueado" | `done` — ver detalle abajo |
-| D-03 | **`authclient.rs` no reenvía la IP real del caller a `xindeler-auth` en ninguna de sus llamadas** — todo el tráfico de la landing (login, 2FA, forgot/reset-password, change_password/username, delete_account, 2fa/*) le llega a auth como si viniera de una sola IP (la de este servicio) | `todo` — **prioridad, tomar apenas termine el trabajo en curso**. Hallazgo cross-repo de la sesión de `xindeler-auth`, 2026-08-22, durante el diseño de `xindeler-vinz-clortho` (gateway de login para el cliente nativo del juego, mismo problema que este repo ya tiene hoy en producción). Ver el detalle completo abajo. |
+| D-03 | **`authclient.rs` no reenvía la IP real del caller a `xindeler-auth` en ninguna de sus llamadas** — todo el tráfico de la landing (login, 2FA, forgot/reset-password, change_password/username, delete_account, 2fa/*) le llega a auth como si viniera de una sola IP (la de este servicio) | `done` — ver detalle abajo |
 
 **D-02, resuelto (2026-08-15).** El hallazgo original (`POST /api/session/login` colapsaba el `403
 EMAIL_VERIFICATION_REQUIRED` de `xindeler-auth` a un error genérico, rompiendo el modal de cuentas
@@ -160,7 +160,41 @@ cookie, `completion_token`/`deadline` intactos) y
 `login_treats_an_unparseable_403_body_as_generic_invalid_credentials` (un 403 sin ese shape sigue
 siendo el genérico de siempre). Total del repo: 58 tests (32 unitarios + 26 de integración).
 
-**D-03, hallazgo (2026-08-22, cross-repo desde `xindeler-auth`), sin resolver todavía.**
+**D-03, resuelto (2026-08-23).** Hallazgo cross-repo desde `xindeler-auth`, 2026-08-22 (detalle
+original del hallazgo abajo). Se resolvió threadeando la IP real del caller (`web.rs::remote()`, ya
+existente del lado de entrada) hasta cada llamada saliente de `authclient.rs`:
+
+- Los 18 métodos públicos de `AuthClient` que le pegan a `xindeler-auth` ganan un parámetro
+  `caller_ip: IpAddr` (primero después de `&self`) y agregan `.header("X-Real-IP",
+  caller_ip.to_string())` a la request. Sin excepciones — incluye `verify()` e
+  `issue_character_access_token()` (server-to-server, con `service_token`/
+  `character_service_token`), no solo las rutas públicas.
+- `session::create_session` gana el mismo parámetro (lo necesita para pasárselo a `verify()`);
+  `session::login_2fa` pasa de no recibir IP a recibirla como segundo parámetro (mismo lugar que
+  `session::login`/`oauth_login` ya la reciben).
+- Los 16 handlers de `account.rs` ganan `remote_ip: IpAddr` como parámetro nuevo — ninguno lo
+  recibía antes de este cambio.
+- `web.rs::dispatch` pasa el `remote_ip` que ya calculaba (para logging) a cada llamada de
+  `account::*`/`session::login_2fa` que antes no lo recibía.
+- Sin cambios de contrato público hacia el frontend — es un cambio interno de `xindeler-web-api` →
+  `xindeler-auth`, invisible para `xindeler-web-landing`.
+
+Tests nuevos (`server/tests/http_integration.rs`): `FakeAuthServer` gana `last_x_real_ip()`
+(captura el último request crudo recibido y extrae el header, case-insensitive). Tres tests
+end-to-end confirman el forwarding real vía `X-Forwarded-For` en la request del test cliente
+(`TestServer`'s `WEB_API_TRUSTED_PROXIES` por default confía en el peer loopback del test, igual
+que un nginx real confiaría en `$remote_addr`): `login_forwards_the_real_caller_ip_as_x_real_ip`,
+`check_username_forwards_the_real_caller_ip_as_x_real_ip`,
+`register_forwards_the_real_caller_ip_as_x_real_ip`. Total del repo: 101 tests (38 unitarios + 63
+de integración).
+
+**Pendiente, fuera de este cambio:** si `xindeler-web-api` no corre en el mismo VPS que
+`xindeler-auth` (o su IP no cae en el default `127.0.0.0/8,::1/128` de `AUTH_TRUSTED_PROXIES`),
+hay que sumarla ahí explícitamente del lado de `xindeler-auth` — sin eso, `xindeler-auth` sigue
+ignorando el header aunque ahora sí lo reciba, porque solo confía en `X-Real-IP` de proxies
+declarados. Coordinar con Mati/`xindeler-auth` antes de asumir que ya está cubierto en producción.
+
+**D-03, hallazgo original (2026-08-22, cross-repo desde `xindeler-auth`).**
 
 `server/src/authclient.rs` — **ninguna** de sus llamadas a `xindeler-auth` manda `X-Real-IP` (ni
 ningún otro header equivalente): `sign_in` (`:206`, `/generate_token`), `submit_2fa_code` (`:291`,

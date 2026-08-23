@@ -253,6 +253,10 @@ struct FakeAuthServer {
     base_url: String,
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
+    /// The full raw text (request line + headers) of the last request this
+    /// server received — read by `last_x_real_ip()` (D-03) to assert
+    /// `authclient.rs` actually forwards the caller's real IP.
+    last_request: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl FakeAuthServer {
@@ -264,6 +268,8 @@ impl FakeAuthServer {
         let addr = listener.local_addr().unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
+        let last_request = Arc::new(std::sync::Mutex::new(None));
+        let last_request_clone = Arc::clone(&last_request);
 
         let handle = thread::spawn(move || {
             while !stop_clone.load(Ordering::Relaxed) {
@@ -272,7 +278,8 @@ impl FakeAuthServer {
                         stream.set_nonblocking(false).unwrap();
                         let mut buf = [0_u8; 4096];
                         let n = stream.read(&mut buf).unwrap_or(0);
-                        let request = String::from_utf8_lossy(&buf[..n]);
+                        let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+                        *last_request_clone.lock().unwrap() = Some(request.clone());
                         let path = request
                             .lines()
                             .next()
@@ -301,7 +308,18 @@ impl FakeAuthServer {
             base_url: format!("http://{addr}"),
             stop,
             handle: Some(handle),
+            last_request,
         }
+    }
+
+    /// The `X-Real-IP` header value on the last request received, if any —
+    /// case-insensitive header name match, same as real HTTP.
+    fn last_x_real_ip(&self) -> Option<String> {
+        let request = self.last_request.lock().unwrap().clone()?;
+        request.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            (name.trim().eq_ignore_ascii_case("x-real-ip")).then(|| value.trim().to_owned())
+        })
     }
 }
 
@@ -1609,4 +1627,71 @@ fn list_characters_forwards_upstream_unavailability_as_502() {
         .unwrap();
     assert_eq!(response.status(), 502);
     assert_eq!(body_json(response)["code"], "UPSTREAM_ERROR");
+}
+
+// --- D-03: authclient.rs forwards the real caller IP as X-Real-IP to
+// xindeler-auth, instead of every request looking like it came from this
+// service. `TestServer::start`'s default WEB_API_TRUSTED_PROXIES
+// ("127.0.0.0/8") trusts the test client's own loopback peer, so an
+// X-Forwarded-For header on the request is exactly what a real nginx in
+// front of this service would set from $remote_addr. ---
+
+#[test]
+fn login_forwards_the_real_caller_ip_as_x_real_ip() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/session/login"))
+        .header("X-Forwarded-For", "203.0.113.42")
+        .json(&json!({"username": "tester", "password_prehash": "deadbeef"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    // sign_in() and verify() are both called during login -- either request
+    // to the fake server carries the same forwarded IP, so whichever one
+    // landed last still proves it was sent.
+    assert_eq!(auth.last_x_real_ip().as_deref(), Some("203.0.113.42"));
+}
+
+#[test]
+fn check_username_forwards_the_real_caller_ip_as_x_real_ip() {
+    let auth = FakeAuthServer::start(&[("/check-username", 200, r#"{"available":true}"#)]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .get(server.url("/api/account/check-username?username=nuevo"))
+        .header("X-Forwarded-For", "198.51.100.9")
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(auth.last_x_real_ip().as_deref(), Some("198.51.100.9"));
+}
+
+#[test]
+fn register_forwards_the_real_caller_ip_as_x_real_ip() {
+    let auth = FakeAuthServer::start(&[REGISTER_OK]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/account/register"))
+        .header("X-Forwarded-For", "198.51.100.77")
+        .json(&json!({
+            "username": "nuevonombre",
+            "password_prehash": "deadbeef",
+            "email": "n@example.com"
+        }))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(auth.last_x_real_ip().as_deref(), Some("198.51.100.77"));
 }

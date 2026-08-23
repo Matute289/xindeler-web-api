@@ -9,6 +9,7 @@
 
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Deserialize;
+use std::net::IpAddr;
 use std::time::Duration;
 use uuid::Uuid;
 use xindeler_auth_common::{
@@ -201,9 +202,12 @@ impl AuthClient {
     }
 
     /// `password_prehash` must already be the client-side prehash — never a
-    /// raw password (see module docs).
+    /// raw password (see module docs). `caller_ip` is forwarded as
+    /// `X-Real-IP` (D-03) so xindeler-auth's own per-IP rate limit sees the
+    /// real caller instead of this service's IP for every request.
     pub fn sign_in(
         &self,
+        caller_ip: IpAddr,
         username: &str,
         password_prehash: &str,
     ) -> Result<SignInOutcome, AuthClientError> {
@@ -214,6 +218,7 @@ impl AuthClient {
         let response = self
             .client
             .post(format!("{}/generate_token", self.base_url))
+            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -289,6 +294,7 @@ impl AuthClient {
     /// `uuid`/`username`, then create the session.
     pub fn totp_login(
         &self,
+        caller_ip: IpAddr,
         challenge_id: ChallengeId,
         code: &str,
     ) -> Result<AuthToken, AuthClientError> {
@@ -299,6 +305,7 @@ impl AuthClient {
         let response = self
             .client
             .post(format!("{}/login/2fa", self.base_url))
+            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -312,7 +319,11 @@ impl AuthClient {
     /// call) into the uuid/username that own it. Server-to-server only:
     /// requires the shared service token, same credential the game server
     /// already uses against this same endpoint.
-    pub fn verify(&self, token: AuthToken) -> Result<ValidityCheckResponse, AuthClientError> {
+    pub fn verify(
+        &self,
+        caller_ip: IpAddr,
+        token: AuthToken,
+    ) -> Result<ValidityCheckResponse, AuthClientError> {
         let service_token = self
             .service_token
             .as_deref()
@@ -322,6 +333,7 @@ impl AuthClient {
             .client
             .post(format!("{}/verify", self.base_url))
             .bearer_auth(service_token)
+            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -341,6 +353,7 @@ impl AuthClient {
     /// xindeler-auth explicitly refuses for this endpoint.
     pub fn issue_character_access_token(
         &self,
+        caller_ip: IpAddr,
         uuid: Uuid,
     ) -> Result<xindeler_auth_common::CharacterAccessToken, AuthClientError> {
         let character_service_token = self
@@ -352,6 +365,7 @@ impl AuthClient {
             .client
             .post(format!("{}/issue-character-access-token", self.base_url))
             .bearer_auth(character_service_token)
+            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -366,7 +380,11 @@ impl AuthClient {
     // as `/generate_token`/`/register`). `password_prehash` fields must
     // already be prehashed, same as `sign_in`.
 
-    pub fn check_username(&self, username: &str) -> Result<bool, AuthClientError> {
+    pub fn check_username(
+        &self,
+        caller_ip: IpAddr,
+        username: &str,
+    ) -> Result<bool, AuthClientError> {
         let encoded = utf8_percent_encode(username, NON_ALPHANUMERIC);
         let response = self
             .client
@@ -374,6 +392,7 @@ impl AuthClient {
                 "{}/check-username?username={encoded}",
                 self.base_url
             ))
+            .header("X-Real-IP", caller_ip.to_string())
             .send()?;
         let status = response.status();
         if !status.is_success() {
@@ -389,6 +408,7 @@ impl AuthClient {
     /// through whatever the caller gave (including `None`).
     pub fn change_username(
         &self,
+        caller_ip: IpAddr,
         old_username: &str,
         password_prehash: &str,
         new_username: &str,
@@ -403,6 +423,7 @@ impl AuthClient {
         let response = self
             .client
             .post(format!("{}/change_username", self.base_url))
+            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -418,6 +439,7 @@ impl AuthClient {
     /// `xindeler-auth`'s source, not assumed).
     pub fn change_password(
         &self,
+        caller_ip: IpAddr,
         username: &str,
         current_password_prehash: &str,
         new_password_prehash: &str,
@@ -430,6 +452,7 @@ impl AuthClient {
         let response = self
             .client
             .post(format!("{}/change_password", self.base_url))
+            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -441,6 +464,7 @@ impl AuthClient {
 
     pub fn delete_account(
         &self,
+        caller_ip: IpAddr,
         username: &str,
         password_prehash: &str,
         code: Option<&str>,
@@ -453,6 +477,7 @@ impl AuthClient {
         let response = self
             .client
             .post(format!("{}/delete_account", self.base_url))
+            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -466,13 +491,14 @@ impl AuthClient {
     /// exists — anti-enumeration, same as `/api/waitlist`'s dedup response.
     /// A non-2xx here means the request itself was malformed, never "no
     /// such account".
-    pub fn forgot_password(&self, email: &str) -> Result<(), AuthClientError> {
+    pub fn forgot_password(&self, caller_ip: IpAddr, email: &str) -> Result<(), AuthClientError> {
         let payload = ForgotPasswordPayload {
             email: email.to_owned(),
         };
         let response = self
             .client
             .post(format!("{}/forgot-password", self.base_url))
+            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -484,6 +510,7 @@ impl AuthClient {
 
     pub fn reset_password(
         &self,
+        caller_ip: IpAddr,
         token: &str,
         new_password_prehash: &str,
     ) -> Result<(), AuthClientError> {
@@ -494,6 +521,7 @@ impl AuthClient {
         let response = self
             .client
             .post(format!("{}/reset-password", self.base_url))
+            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -512,6 +540,7 @@ impl AuthClient {
     /// the request itself was invalid (bad username, reserved name, ...).
     pub fn register(
         &self,
+        caller_ip: IpAddr,
         username: &str,
         password_prehash: &str,
         email: Option<&str>,
@@ -524,6 +553,7 @@ impl AuthClient {
         let response = self
             .client
             .post(format!("{}/register", self.base_url))
+            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -536,11 +566,12 @@ impl AuthClient {
     /// `GET /verify-email?token=`, reached from the emailed verification
     /// link. No service token — same public tier as the rest of this
     /// section.
-    pub fn verify_email(&self, token: &str) -> Result<(), AuthClientError> {
+    pub fn verify_email(&self, caller_ip: IpAddr, token: &str) -> Result<(), AuthClientError> {
         let encoded = utf8_percent_encode(token, NON_ALPHANUMERIC);
         let response = self
             .client
             .get(format!("{}/verify-email?token={encoded}", self.base_url))
+            .header("X-Real-IP", caller_ip.to_string())
             .send()?;
         let status = response.status();
         if !status.is_success() {
@@ -557,6 +588,7 @@ impl AuthClient {
     /// service's own credentials, not the caller's).
     pub fn set_account_email(
         &self,
+        caller_ip: IpAddr,
         completion_token: &str,
         email: &str,
     ) -> Result<(), AuthClientError> {
@@ -567,6 +599,7 @@ impl AuthClient {
             .client
             .post(format!("{}/account-email", self.base_url))
             .bearer_auth(completion_token)
+            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -579,11 +612,16 @@ impl AuthClient {
     /// Same `completion_token` credential as `set_account_email` above.
     /// xindeler-auth's `/resend-verification` reads no body at all, only
     /// the bearer token.
-    pub fn resend_verification(&self, completion_token: &str) -> Result<(), AuthClientError> {
+    pub fn resend_verification(
+        &self,
+        caller_ip: IpAddr,
+        completion_token: &str,
+    ) -> Result<(), AuthClientError> {
         let response = self
             .client
             .post(format!("{}/resend-verification", self.base_url))
             .bearer_auth(completion_token)
+            .header("X-Real-IP", caller_ip.to_string())
             .send()?;
         let status = response.status();
         if !status.is_success() {
@@ -600,6 +638,7 @@ impl AuthClient {
 
     pub fn totp_enroll(
         &self,
+        caller_ip: IpAddr,
         username: &str,
         password_prehash: &str,
     ) -> Result<TotpEnrollResponse, AuthClientError> {
@@ -610,6 +649,7 @@ impl AuthClient {
         let response = self
             .client
             .post(format!("{}/2fa/enroll", self.base_url))
+            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -621,6 +661,7 @@ impl AuthClient {
 
     pub fn totp_confirm(
         &self,
+        caller_ip: IpAddr,
         username: &str,
         password_prehash: &str,
         code: &str,
@@ -633,6 +674,7 @@ impl AuthClient {
         let response = self
             .client
             .post(format!("{}/2fa/confirm", self.base_url))
+            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -644,6 +686,7 @@ impl AuthClient {
 
     pub fn totp_disable(
         &self,
+        caller_ip: IpAddr,
         username: &str,
         password_prehash: &str,
         code: &str,
@@ -656,6 +699,7 @@ impl AuthClient {
         let response = self
             .client
             .post(format!("{}/2fa/disable", self.base_url))
+            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();
@@ -667,6 +711,7 @@ impl AuthClient {
 
     pub fn totp_regenerate_backup_codes(
         &self,
+        caller_ip: IpAddr,
         username: &str,
         password_prehash: &str,
         code: &str,
@@ -679,6 +724,7 @@ impl AuthClient {
         let response = self
             .client
             .post(format!("{}/2fa/backup-codes/regenerate", self.base_url))
+            .header("X-Real-IP", caller_ip.to_string())
             .json(&payload)
             .send()?;
         let status = response.status();

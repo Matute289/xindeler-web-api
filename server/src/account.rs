@@ -12,6 +12,7 @@ use crate::http::{Request, Response};
 use crate::session::{clear_cookie, resolve_session, revoke_all_sessions};
 use crate::state::AppState;
 use crate::totp_status;
+use std::net::IpAddr;
 use uuid::Uuid;
 use xindeler_web_api_common::{
     AccountEmailRequest, AvailabilityResponse, ChangePasswordRequest, ChangeUsernameRequest,
@@ -123,14 +124,18 @@ fn map_or_forward(
 /// during registration. Exists here too so the account screen (005) can
 /// check a *new* username's availability without a second, differently
 /// authenticated code path.
-pub fn check_username(request: &Request, state: &AppState) -> Result<Response, ApiError> {
+pub fn check_username(
+    request: &Request,
+    remote_ip: IpAddr,
+    state: &AppState,
+) -> Result<Response, ApiError> {
     let username = request
         .get_param("username")
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| ApiError::InvalidRequest("username is required".into()))?;
     let available = state
         .auth_client
-        .check_username(&username)
+        .check_username(remote_ip, &username)
         .map_err(map_account_error)?;
     Ok(Response::json(&AvailabilityResponse { available }))
 }
@@ -138,6 +143,7 @@ pub fn check_username(request: &Request, state: &AppState) -> Result<Response, A
 pub fn change_username(
     body: &[u8],
     request: &Request,
+    remote_ip: IpAddr,
     state: &AppState,
 ) -> Result<Response, ApiError> {
     let identity = resolve_session(request)?;
@@ -149,6 +155,7 @@ pub fn change_username(
     }
 
     if let Err(err) = state.auth_client.change_username(
+        remote_ip,
         &identity.username,
         &payload.password_prehash,
         &payload.new_username,
@@ -166,6 +173,7 @@ pub fn change_username(
 pub fn change_password(
     body: &[u8],
     request: &Request,
+    remote_ip: IpAddr,
     state: &AppState,
 ) -> Result<Response, ApiError> {
     let identity = resolve_session(request)?;
@@ -181,6 +189,7 @@ pub fn change_password(
     state
         .auth_client
         .change_password(
+            remote_ip,
             &identity.username,
             &payload.current_password_prehash,
             &payload.new_password_prehash,
@@ -194,6 +203,7 @@ pub fn change_password(
 pub fn delete_account(
     body: &[u8],
     request: &Request,
+    remote_ip: IpAddr,
     state: &AppState,
 ) -> Result<Response, ApiError> {
     let identity = resolve_session(request)?;
@@ -205,6 +215,7 @@ pub fn delete_account(
     }
 
     if let Err(err) = state.auth_client.delete_account(
+        remote_ip,
         &identity.username,
         &payload.password_prehash,
         payload.code.as_deref(),
@@ -220,14 +231,18 @@ pub fn delete_account(
 /// No session required — this is the "forgot password, can't log in" flow.
 /// Always 200 regardless of whether the email is registered, matching
 /// xindeler-auth's own anti-enumeration behavior on `/forgot-password`.
-pub fn forgot_password(body: &[u8], state: &AppState) -> Result<Response, ApiError> {
+pub fn forgot_password(
+    body: &[u8],
+    remote_ip: IpAddr,
+    state: &AppState,
+) -> Result<Response, ApiError> {
     let payload: ForgotPasswordRequest = serde_json::from_slice(body)?;
     if payload.email.trim().is_empty() {
         return Err(ApiError::InvalidRequest("email is required".into()));
     }
     state
         .auth_client
-        .forgot_password(&payload.email)
+        .forgot_password(remote_ip, &payload.email)
         .map_err(map_recovery_error)?;
     Ok(Response::json(&OkResponse { ok: true }))
 }
@@ -246,6 +261,7 @@ pub fn forgot_password(body: &[u8], state: &AppState) -> Result<Response, ApiErr
 pub fn reset_password(
     body: &[u8],
     request: &Request,
+    remote_ip: IpAddr,
     state: &AppState,
 ) -> Result<Response, ApiError> {
     let payload: ResetPasswordRequest = serde_json::from_slice(body)?;
@@ -257,7 +273,7 @@ pub fn reset_password(
 
     state
         .auth_client
-        .reset_password(&payload.token, &payload.new_password_prehash)
+        .reset_password(remote_ip, &payload.token, &payload.new_password_prehash)
         .map_err(map_recovery_error)?;
 
     if let Ok(identity) = resolve_session(request) {
@@ -272,7 +288,7 @@ pub fn reset_password(
 /// covers both a genuinely new registration and xindeler-auth's own
 /// anti-enumeration response for an email already in use — same response
 /// shape either way, nothing for the client to distinguish.
-pub fn register(body: &[u8], state: &AppState) -> Result<Response, ApiError> {
+pub fn register(body: &[u8], remote_ip: IpAddr, state: &AppState) -> Result<Response, ApiError> {
     let payload: RegisterRequest = serde_json::from_slice(body)?;
     if payload.username.trim().is_empty() || payload.password_prehash.trim().is_empty() {
         return Err(ApiError::InvalidRequest(
@@ -281,6 +297,7 @@ pub fn register(body: &[u8], state: &AppState) -> Result<Response, ApiError> {
     }
 
     if let Err(err) = state.auth_client.register(
+        remote_ip,
         &payload.username,
         &payload.password_prehash,
         payload.email.as_deref(),
@@ -293,13 +310,17 @@ pub fn register(body: &[u8], state: &AppState) -> Result<Response, ApiError> {
 
 /// No session required — reached only via the emailed verification link,
 /// same as the direct call this replaces.
-pub fn verify_email(request: &Request, state: &AppState) -> Result<Response, ApiError> {
+pub fn verify_email(
+    request: &Request,
+    remote_ip: IpAddr,
+    state: &AppState,
+) -> Result<Response, ApiError> {
     let token = request
         .get_param("token")
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| ApiError::InvalidRequest("token is required".into()))?;
 
-    if let Err(err) = state.auth_client.verify_email(&token) {
+    if let Err(err) = state.auth_client.verify_email(remote_ip, &token) {
         return map_or_forward(err, map_recovery_error);
     }
 
@@ -309,7 +330,11 @@ pub fn verify_email(request: &Request, state: &AppState) -> Result<Response, Api
 /// No session required — the `completion_token` in the body is what proves
 /// identity here, same legacy flow as `resend_verification` below. Never a
 /// session cookie: this fires before login ever succeeds.
-pub fn account_email(body: &[u8], state: &AppState) -> Result<Response, ApiError> {
+pub fn account_email(
+    body: &[u8],
+    remote_ip: IpAddr,
+    state: &AppState,
+) -> Result<Response, ApiError> {
     let payload: AccountEmailRequest = serde_json::from_slice(body)?;
     if payload.completion_token.trim().is_empty() || payload.email.trim().is_empty() {
         return Err(ApiError::InvalidRequest(
@@ -317,9 +342,10 @@ pub fn account_email(body: &[u8], state: &AppState) -> Result<Response, ApiError
         ));
     }
 
-    if let Err(err) = state
-        .auth_client
-        .set_account_email(&payload.completion_token, &payload.email)
+    if let Err(err) =
+        state
+            .auth_client
+            .set_account_email(remote_ip, &payload.completion_token, &payload.email)
     {
         return map_or_forward(err, map_recovery_error);
     }
@@ -328,7 +354,11 @@ pub fn account_email(body: &[u8], state: &AppState) -> Result<Response, ApiError
 }
 
 /// Same `completion_token` credential as `account_email` above.
-pub fn resend_verification(body: &[u8], state: &AppState) -> Result<Response, ApiError> {
+pub fn resend_verification(
+    body: &[u8],
+    remote_ip: IpAddr,
+    state: &AppState,
+) -> Result<Response, ApiError> {
     let payload: ResendVerificationRequest = serde_json::from_slice(body)?;
     if payload.completion_token.trim().is_empty() {
         return Err(ApiError::InvalidRequest(
@@ -338,7 +368,7 @@ pub fn resend_verification(body: &[u8], state: &AppState) -> Result<Response, Ap
 
     if let Err(err) = state
         .auth_client
-        .resend_verification(&payload.completion_token)
+        .resend_verification(remote_ip, &payload.completion_token)
     {
         return map_or_forward(err, map_recovery_error);
     }
@@ -350,7 +380,12 @@ pub fn resend_verification(body: &[u8], state: &AppState) -> Result<Response, Ap
 // current password/code travel in the body, same reauth-per-sensitive-
 // action pattern as change-username/change-password/delete above. ---
 
-pub fn totp_enroll(body: &[u8], request: &Request, state: &AppState) -> Result<Response, ApiError> {
+pub fn totp_enroll(
+    body: &[u8],
+    request: &Request,
+    remote_ip: IpAddr,
+    state: &AppState,
+) -> Result<Response, ApiError> {
     let identity = resolve_session(request)?;
     let payload: TotpEnrollRequest = serde_json::from_slice(body)?;
     if payload.password_prehash.trim().is_empty() {
@@ -360,7 +395,7 @@ pub fn totp_enroll(body: &[u8], request: &Request, state: &AppState) -> Result<R
     }
     match state
         .auth_client
-        .totp_enroll(&identity.username, &payload.password_prehash)
+        .totp_enroll(remote_ip, &identity.username, &payload.password_prehash)
     {
         Ok(enrollment) => Ok(Response::json(&TotpEnrollResponse {
             secret_base32: enrollment.secret_base32,
@@ -374,6 +409,7 @@ pub fn totp_enroll(body: &[u8], request: &Request, state: &AppState) -> Result<R
 pub fn totp_confirm(
     body: &[u8],
     request: &Request,
+    remote_ip: IpAddr,
     state: &AppState,
 ) -> Result<Response, ApiError> {
     let identity = resolve_session(request)?;
@@ -384,6 +420,7 @@ pub fn totp_confirm(
         ));
     }
     match state.auth_client.totp_confirm(
+        remote_ip,
         &identity.username,
         &payload.password_prehash,
         &payload.code,
@@ -399,6 +436,7 @@ pub fn totp_confirm(
 pub fn totp_disable(
     body: &[u8],
     request: &Request,
+    remote_ip: IpAddr,
     state: &AppState,
 ) -> Result<Response, ApiError> {
     let identity = resolve_session(request)?;
@@ -409,6 +447,7 @@ pub fn totp_disable(
         ));
     }
     match state.auth_client.totp_disable(
+        remote_ip,
         &identity.username,
         &payload.password_prehash,
         &payload.code,
@@ -429,6 +468,7 @@ pub fn totp_disable(
 pub fn totp_regenerate_backup_codes(
     body: &[u8],
     request: &Request,
+    remote_ip: IpAddr,
     state: &AppState,
 ) -> Result<Response, ApiError> {
     let identity = resolve_session(request)?;
@@ -439,6 +479,7 @@ pub fn totp_regenerate_backup_codes(
         ));
     }
     match state.auth_client.totp_regenerate_backup_codes(
+        remote_ip,
         &identity.username,
         &payload.password_prehash,
         &payload.code,
@@ -527,12 +568,16 @@ fn map_game_server_error(err: GameServerClientError) -> Result<Response, ApiErro
     }
 }
 
-pub fn list_characters(request: &Request, state: &AppState) -> Result<Response, ApiError> {
+pub fn list_characters(
+    request: &Request,
+    remote_ip: IpAddr,
+    state: &AppState,
+) -> Result<Response, ApiError> {
     let identity = resolve_session(request)?;
     let uuid = session_uuid(&identity.uuid)?;
     let token = state
         .auth_client
-        .issue_character_access_token(uuid)
+        .issue_character_access_token(remote_ip, uuid)
         .map_err(map_character_token_error)?;
     match state.game_server_client.list_characters(token) {
         Ok(characters) => Ok(Response::json(&CharactersResponse { characters })),
@@ -544,6 +589,7 @@ pub fn rename_character(
     body: &[u8],
     request: &Request,
     character_id: i64,
+    remote_ip: IpAddr,
     state: &AppState,
 ) -> Result<Response, ApiError> {
     let identity = resolve_session(request)?;
@@ -555,7 +601,7 @@ pub fn rename_character(
     let uuid = session_uuid(&identity.uuid)?;
     let token = state
         .auth_client
-        .issue_character_access_token(uuid)
+        .issue_character_access_token(remote_ip, uuid)
         .map_err(map_character_token_error)?;
     match state
         .game_server_client
