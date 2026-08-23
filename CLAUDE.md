@@ -138,6 +138,36 @@ segundo es el mismo secreto que ya usa el game server contra `xindeler-auth`, `/
 - Migraciones (Fase 1+): secuenciales y **nunca se modifican** — solo se agregan nuevas
 - Tokens sensibles (Fase 2+): siempre almacenar `SHA-256(token)`, nunca el raw
 
+## Deploy
+
+Mismo patrón que `xindeler-auth`/`xindeler-zuul` (mismo VPS, mismo operador, misma historia "sin
+Docker, systemd + reemplazo atómico de binario") — una sola forma de operar entre los tres.
+
+- VPS: `216.238.126.97` (`greenmountain.dev`), deployado por el usuario `mgrinberg` (no un usuario
+  de servicio dedicado, a diferencia de `xindeler-zuul`).
+- Deploy path: `/opt/xindeler-web-api/`. El servicio corre como `xindeler-web-api.service`
+  (systemd), bindeado a `127.0.0.1:8020` — nginx expone `/api/*` de `xindeler.com` proxeando ahí.
+- **Deploys son tag-based, cortados solo de `main`.** Cada merge a `main` recibe un tag SemVer
+  (`vX.Y.Z`) en el merge commit — no opcional, `deploy/deploy.sh` lo exige y rechaza cualquier tag
+  que no sea alcanzable desde `origin/main` (`git merge-base --is-ancestor`). Un tag es también la
+  unidad de rollback: para volver atrás, correr el script de nuevo con un tag más viejo (reconstruye
+  e instala desde esa fuente exacta, no confía en qué binario haya quedado tirado).
+- **Qué número subir (criterio de Mati, 2026-08-23):** `X` (mayor) solo ante cambios
+  estructurales/de arquitectura o forma de trabajar (ej. v2.0.0: cierre de `xindeler-auth` al
+  exterior + todo el circuito de proxies nuevo). `Y` (el del medio) es el release normal — todo lo
+  que no es un cambio estructural sube acá, aunque incluya features. `Z` (último) se reserva para
+  bugfixes puntuales sobre un release ya cortado. Este servicio ya tuvo ~4 deploys manuales sin tag
+  antes de que existiera este flujo — el primer tag no arranca en `v1.0.0`, arranca en `v2.0.0`
+  porque ya veníamos de esos deploys previos y este release en particular es, además, un cambio
+  estructural grande.
+- Deploy: `bash /opt/xindeler-web-api/src/deploy/deploy.sh vX.Y.Z` → fetch de tags → verifica que
+  el tag esté en `main` → backup de `data/web-api.db` (+ `-wal`/`-shm`) → `cargo build --release
+  --locked` → guarda el binario actual como `.previous` → lo reemplaza → `systemctl restart
+  xindeler-web-api.service` → health-check contra `/ping` (60s de margen) → si no responde,
+  rollback automático al binario anterior.
+- **NUNCA deployar al VPS ni reiniciar `xindeler-web-api.service` sin que Mati lo pida
+  explícitamente en la sesión actual** — mismo criterio que los otros dos repos backend.
+
 ## Comandos útiles
 
 ```sh
