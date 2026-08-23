@@ -101,6 +101,22 @@ command -v curl >/dev/null || fail "curl is required for the health check"
 
 log "deploying to $ROOT"
 
+# --- self-update ---------------------------------------------------------------
+
+# A deploy leaves $SRC in a detached HEAD (checked out at the tag it just
+# installed, see below) -- so the next run has to land back on `main`
+# before a plain `git pull` makes sense. Doing this here, before anything
+# else, is what lets a bare `bash deploy.sh vX.Y.Z` work with no manual
+# `git pull` first: this refreshes the whole checkout, this script
+# included. Safe to do to the very file bash is currently executing --
+# `git checkout`/`pull` replace the file's inode rather than editing it
+# in place, and bash keeps reading the file descriptor it opened at
+# launch, so *this* run keeps going on the version that was current when
+# it started; only the *next* invocation sees whatever changed here.
+log "updating $SRC to the latest main"
+(cd "$SRC" && git checkout main -q && git pull --ff-only -q) \
+    || fail "could not update $SRC to latest main (check for a dirty working tree)"
+
 # --- database backup ---------------------------------------------------------
 
 # sqlite3 is not installed on the VPS, so ".backup" is unavailable. Copying
