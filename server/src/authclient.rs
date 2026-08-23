@@ -14,11 +14,10 @@ use uuid::Uuid;
 use xindeler_auth_common::{
     AuthToken, ChallengeId, ChangePasswordPayload, ChangeUsernamePayload,
     CharacterAccessTokenResponse, DeleteAccountPayload, EmailVerificationRequiredResponse,
-    ForgotPasswordPayload, IssueCharacterAccessTokenPayload, RegisterPayload,
-    ResetPasswordPayload, SetAccountEmailPayload, SignInPayload, SignInResponse,
-    TotpBackupCodesResponse, TotpChallengeResponse, TotpCodePayload, TotpEnrollPayload,
-    TotpEnrollResponse, TotpLoginPayload, UsernameAvailabilityResponse, ValidityCheckPayload,
-    ValidityCheckResponse,
+    ForgotPasswordPayload, IssueCharacterAccessTokenPayload, RegisterPayload, ResetPasswordPayload,
+    SetAccountEmailPayload, SignInPayload, SignInResponse, TotpBackupCodesResponse,
+    TotpChallengeResponse, TotpCodePayload, TotpEnrollPayload, TotpEnrollResponse,
+    TotpLoginPayload, UsernameAvailabilityResponse, ValidityCheckPayload, ValidityCheckResponse,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);

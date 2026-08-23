@@ -15,8 +15,8 @@ use crate::totp_status;
 use uuid::Uuid;
 use xindeler_web_api_common::{
     AccountEmailRequest, AvailabilityResponse, ChangePasswordRequest, ChangeUsernameRequest,
-    CharactersResponse, DeleteAccountRequest, ForgotPasswordRequest, OkResponse,
-    RegisterRequest, RenameCharacterRequest, ResendVerificationRequest, ResetPasswordRequest,
+    CharactersResponse, DeleteAccountRequest, ForgotPasswordRequest, OkResponse, RegisterRequest,
+    RenameCharacterRequest, ResendVerificationRequest, ResetPasswordRequest,
     TotpBackupCodesResponse, TotpCodeRequest, TotpEnrollRequest, TotpEnrollResponse,
 };
 
