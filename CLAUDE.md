@@ -152,6 +152,14 @@ Docker, systemd + reemplazo atómico de binario") — una sola forma de operar e
   que no sea alcanzable desde `origin/main` (`git merge-base --is-ancestor`). Un tag es también la
   unidad de rollback: para volver atrás, correr el script de nuevo con un tag más viejo (reconstruye
   e instala desde esa fuente exacta, no confía en qué binario haya quedado tirado).
+- **Qué número subir (criterio de Mati, 2026-08-23):** `X` (mayor) solo ante cambios
+  estructurales/de arquitectura o forma de trabajar (ej. v2.0.0: cierre de `xindeler-auth` al
+  exterior + todo el circuito de proxies nuevo). `Y` (el del medio) es el release normal — todo lo
+  que no es un cambio estructural sube acá, aunque incluya features. `Z` (último) se reserva para
+  bugfixes puntuales sobre un release ya cortado. Este servicio ya tuvo ~4 deploys manuales sin tag
+  antes de que existiera este flujo — el primer tag no arranca en `v1.0.0`, arranca en `v2.0.0`
+  porque ya veníamos de esos deploys previos y este release en particular es, además, un cambio
+  estructural grande.
 - Deploy: `bash /opt/xindeler-web-api/src/deploy/deploy.sh vX.Y.Z` → fetch de tags → verifica que
   el tag esté en `main` → backup de `data/web-api.db` (+ `-wal`/`-shm`) → `cargo build --release
   --locked` → guarda el binario actual como `.previous` → lo reemplaza → `systemctl restart
