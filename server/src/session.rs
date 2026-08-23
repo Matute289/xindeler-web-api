@@ -167,6 +167,7 @@ fn map_sign_in_error(err: AuthClientError) -> ApiError {
 /// instead if the account had TOTP confirmed) and `true` after `/login/2fa`
 /// succeeds — either way it's a fact this call already knows, not a guess.
 fn create_session(
+    caller_ip: IpAddr,
     auth_token: AuthToken,
     fallback_username: String,
     totp_confirmed: bool,
@@ -174,7 +175,7 @@ fn create_session(
 ) -> Result<Response, ApiError> {
     let verified = state
         .auth_client
-        .verify(auth_token)
+        .verify(caller_ip, auth_token)
         .map_err(map_sign_in_error)?;
     let username = verified.username.unwrap_or(fallback_username);
     let uuid = verified.uuid.to_string();
@@ -213,46 +214,49 @@ pub fn login(body: &[u8], remote_ip: IpAddr, state: &AppState) -> Result<Respons
         return Err(ApiError::RateLimit);
     }
 
-    let outcome = match state
-        .auth_client
-        .sign_in(&payload.username, &payload.password_prehash)
-    {
-        Ok(outcome) => outcome,
-        // Forwarded verbatim, not through the generic error envelope — the
-        // frontend's legacy account-recovery modal needs the exact
-        // completion_token/deadline shape xindeler-auth already returns.
-        Err(AuthClientError::EmailVerificationRequired(body)) => {
-            return Ok(Response::json(&body).with_status_code(403));
-        }
-        Err(AuthClientError::AccountLoginLocked {
-            message,
-            locked_until,
-        }) => {
-            return Ok(Response::json(&LoginLockedResponse {
-                code: "ACCOUNT_LOGIN_LOCKED",
-                message: &message,
-                request_id: hex::encode(rand::random::<[u8; 8]>()),
+    let outcome =
+        match state
+            .auth_client
+            .sign_in(remote_ip, &payload.username, &payload.password_prehash)
+        {
+            Ok(outcome) => outcome,
+            // Forwarded verbatim, not through the generic error envelope — the
+            // frontend's legacy account-recovery modal needs the exact
+            // completion_token/deadline shape xindeler-auth already returns.
+            Err(AuthClientError::EmailVerificationRequired(body)) => {
+                return Ok(Response::json(&body).with_status_code(403));
+            }
+            Err(AuthClientError::AccountLoginLocked {
+                message,
                 locked_until,
-            })
-            .with_status_code(423));
-        }
-        // ACCOUNT_NOT_ACTIVE (G-08's permanent-lockout tier, or any other
-        // moderation ban) — forwarded the same way login_2fa() already
-        // forwards its own verbatim codes below, so it doesn't collapse
-        // into the generic invalid-login copy map_sign_in_error would give
-        // every other 403.
-        Err(AuthClientError::RejectedWithBody {
-            status,
-            code,
-            message,
-        }) if should_forward_verbatim(&code) => {
-            return Ok(error::forwarded_response(status, code, message));
-        }
-        Err(err) => return Err(map_sign_in_error(err)),
-    };
+            }) => {
+                return Ok(Response::json(&LoginLockedResponse {
+                    code: "ACCOUNT_LOGIN_LOCKED",
+                    message: &message,
+                    request_id: hex::encode(rand::random::<[u8; 8]>()),
+                    locked_until,
+                })
+                .with_status_code(423));
+            }
+            // ACCOUNT_NOT_ACTIVE (G-08's permanent-lockout tier, or any other
+            // moderation ban) — forwarded the same way login_2fa() already
+            // forwards its own verbatim codes below, so it doesn't collapse
+            // into the generic invalid-login copy map_sign_in_error would give
+            // every other 403.
+            Err(AuthClientError::RejectedWithBody {
+                status,
+                code,
+                message,
+            }) if should_forward_verbatim(&code) => {
+                return Ok(error::forwarded_response(status, code, message));
+            }
+            Err(err) => return Err(map_sign_in_error(err)),
+        };
 
     match outcome {
-        SignInOutcome::Token(token) => create_session(token, payload.username, false, state),
+        SignInOutcome::Token(token) => {
+            create_session(remote_ip, token, payload.username, false, state)
+        }
         // The account has a confirmed TOTP enrollment — hallazgo 2 of
         // backlog 007: no session gets created until the second factor is
         // confirmed via login_2fa() below, or a present-but-2FA-off cookie
@@ -288,10 +292,10 @@ pub fn oauth_login(body: &[u8], remote_ip: IpAddr, state: &AppState) -> Result<R
         .parse()
         .map_err(|_| ApiError::InvalidRequest("token is malformed".into()))?;
 
-    create_session(token, String::new(), false, state)
+    create_session(remote_ip, token, String::new(), false, state)
 }
 
-pub fn login_2fa(body: &[u8], state: &AppState) -> Result<Response, ApiError> {
+pub fn login_2fa(body: &[u8], remote_ip: IpAddr, state: &AppState) -> Result<Response, ApiError> {
     let payload: LoginTotpRequest = serde_json::from_slice(body)?;
     if payload.challenge_id.trim().is_empty() || payload.code.trim().is_empty() {
         return Err(ApiError::InvalidRequest(
@@ -303,7 +307,10 @@ pub fn login_2fa(body: &[u8], state: &AppState) -> Result<Response, ApiError> {
         .parse()
         .map_err(|_| ApiError::InvalidRequest("challenge_id is malformed".into()))?;
 
-    let auth_token = match state.auth_client.totp_login(challenge_id, &payload.code) {
+    let auth_token = match state
+        .auth_client
+        .totp_login(remote_ip, challenge_id, &payload.code)
+    {
         Ok(token) => token,
         Err(AuthClientError::RejectedWithBody {
             status,
@@ -320,7 +327,7 @@ pub fn login_2fa(body: &[u8], state: &AppState) -> Result<Response, ApiError> {
     // doc comment on why that field is optional) — in the extremely
     // unlikely case it's missing, create_session() falls back to an empty
     // string rather than failing the whole login.
-    create_session(auth_token, String::new(), true, state)
+    create_session(remote_ip, auth_token, String::new(), true, state)
 }
 
 pub fn me(request: &Request) -> Result<Response, ApiError> {
