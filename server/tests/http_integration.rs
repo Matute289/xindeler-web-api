@@ -63,8 +63,16 @@ impl TestServer {
         server
     }
 
+    /// 20s, not 5s: dozens of `TestServer`s spawn a real process each (with
+    /// its own SQLite migrations) whenever the suite runs with more than one
+    /// test thread (the default) -- under that parallel load, process
+    /// scheduling and disk I/O contention alone can push a single server's
+    /// startup past 5s even though nothing is actually wrong, which was
+    /// flaking real, unrelated tests in CI (confirmed: 0/3 failures with
+    /// `--test-threads=1`, 2/5 with the default parallel run, always
+    /// panicking here rather than in the failing test's own assertion).
     fn wait_until_ready(&self) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(20);
         while Instant::now() < deadline {
             if reqwest::blocking::get(format!("{}/ping", self.base_url)).is_ok() {
                 return;
