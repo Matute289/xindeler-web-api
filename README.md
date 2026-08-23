@@ -7,6 +7,10 @@ sesión web autenticada de la landing.
 Reemplaza al backend Python (FastAPI) que corría sin versionar en el VPS — mismo contrato
 observable de cara al frontend, pero compilado, versionado, con CI y tests de integración.
 
+Status: **live in production**, deployado en `xindeler.com/api/*`, actualmente en `v1.0.0`
+(2026-08-23). Ver "Deploy" en `CLAUDE.md` para el flujo de release (tags SemVer, cortados de
+`main`, `deploy/deploy.sh` hace el resto).
+
 ## Seguridad y flujo
 
 - Todo el tráfico mutable pasa por acá — nunca directo del frontend a `xindeler-auth`. Esto
