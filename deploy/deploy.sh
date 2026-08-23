@@ -28,7 +28,14 @@ BIN="$ROOT/xindeler-web-api-server"
 PREVIOUS="$ROOT/xindeler-web-api-server.previous"
 DATA="$ROOT/data"
 HEALTH_URL="${WEB_API_HEALTH_URL:-http://127.0.0.1:8020/ping}"
-PUBLIC_URL="${WEB_API_PUBLIC_HEALTH_URL:-https://xindeler.com/api/ping}"
+# NOT /api/ping or /ping: nginx only proxies paths under /api/ to this
+# service (see xindeler.com's site config) -- /ping itself has no route
+# there and falls through to the frontend's SPA catch-all, returning a 200
+# of unrelated HTML instead of this service's "pong" (confirmed against
+# production, not assumed). /api/waitlist/count is a real proxied GET with
+# no side effects, always available, so it actually proves the public path
+# end to end instead of silently no-oping on a 200 from the wrong app.
+PUBLIC_URL="${WEB_API_PUBLIC_HEALTH_URL:-https://xindeler.com/api/waitlist/count}"
 HEALTH_TIMEOUT=60
 CARGO="${CARGO:-$HOME/.cargo/bin/cargo}"
 SERVICE_UNIT="${WEB_API_SERVICE_UNIT:-xindeler-web-api.service}"
