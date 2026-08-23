@@ -14,10 +14,10 @@ use crate::state::AppState;
 use crate::totp_status;
 use uuid::Uuid;
 use xindeler_web_api_common::{
-    AvailabilityResponse, ChangePasswordRequest, ChangeUsernameRequest, CharactersResponse,
-    DeleteAccountRequest, ForgotPasswordRequest, OkResponse, RenameCharacterRequest,
-    ResetPasswordRequest, TotpBackupCodesResponse, TotpCodeRequest, TotpEnrollRequest,
-    TotpEnrollResponse,
+    AccountEmailRequest, AvailabilityResponse, ChangePasswordRequest, ChangeUsernameRequest,
+    CharactersResponse, DeleteAccountRequest, ForgotPasswordRequest, OkResponse, RegisterRequest,
+    RenameCharacterRequest, ResendVerificationRequest, ResetPasswordRequest,
+    TotpBackupCodesResponse, TotpCodeRequest, TotpEnrollRequest, TotpEnrollResponse,
 };
 
 fn map_account_error(err: AuthClientError) -> ApiError {
@@ -265,6 +265,85 @@ pub fn reset_password(
     }
 
     Ok(clear_cookie(Response::json(&OkResponse { ok: true })))
+}
+
+/// No session required — same "prove you can receive email" flow the
+/// frontend used to run directly against `auth.xindeler.com`. A 200 here
+/// covers both a genuinely new registration and xindeler-auth's own
+/// anti-enumeration response for an email already in use — same response
+/// shape either way, nothing for the client to distinguish.
+pub fn register(body: &[u8], state: &AppState) -> Result<Response, ApiError> {
+    let payload: RegisterRequest = serde_json::from_slice(body)?;
+    if payload.username.trim().is_empty() || payload.password_prehash.trim().is_empty() {
+        return Err(ApiError::InvalidRequest(
+            "username and password_prehash are required".into(),
+        ));
+    }
+
+    if let Err(err) = state.auth_client.register(
+        &payload.username,
+        &payload.password_prehash,
+        payload.email.as_deref(),
+    ) {
+        return map_or_forward(err, map_recovery_error);
+    }
+
+    Ok(Response::json(&OkResponse { ok: true }))
+}
+
+/// No session required — reached only via the emailed verification link,
+/// same as the direct call this replaces.
+pub fn verify_email(request: &Request, state: &AppState) -> Result<Response, ApiError> {
+    let token = request
+        .get_param("token")
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| ApiError::InvalidRequest("token is required".into()))?;
+
+    if let Err(err) = state.auth_client.verify_email(&token) {
+        return map_or_forward(err, map_recovery_error);
+    }
+
+    Ok(Response::json(&OkResponse { ok: true }))
+}
+
+/// No session required — the `completion_token` in the body is what proves
+/// identity here, same legacy flow as `resend_verification` below. Never a
+/// session cookie: this fires before login ever succeeds.
+pub fn account_email(body: &[u8], state: &AppState) -> Result<Response, ApiError> {
+    let payload: AccountEmailRequest = serde_json::from_slice(body)?;
+    if payload.completion_token.trim().is_empty() || payload.email.trim().is_empty() {
+        return Err(ApiError::InvalidRequest(
+            "completion_token and email are required".into(),
+        ));
+    }
+
+    if let Err(err) = state
+        .auth_client
+        .set_account_email(&payload.completion_token, &payload.email)
+    {
+        return map_or_forward(err, map_recovery_error);
+    }
+
+    Ok(Response::json(&OkResponse { ok: true }))
+}
+
+/// Same `completion_token` credential as `account_email` above.
+pub fn resend_verification(body: &[u8], state: &AppState) -> Result<Response, ApiError> {
+    let payload: ResendVerificationRequest = serde_json::from_slice(body)?;
+    if payload.completion_token.trim().is_empty() {
+        return Err(ApiError::InvalidRequest(
+            "completion_token is required".into(),
+        ));
+    }
+
+    if let Err(err) = state
+        .auth_client
+        .resend_verification(&payload.completion_token)
+    {
+        return map_or_forward(err, map_recovery_error);
+    }
+
+    Ok(Response::json(&OkResponse { ok: true }))
 }
 
 // --- Fase L (2FA/TOTP), all four require an active session; the account's

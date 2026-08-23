@@ -846,6 +846,173 @@ fn reset_password_revokes_the_callers_session_when_one_is_present() {
     assert_eq!(me.status(), 401);
 }
 
+// --- C-04: /api/account/{register,verify-email,account-email,resend-verification} proxy tests ---
+
+const REGISTER_OK: (&str, u16, &str) = ("/register", 200, "Ok");
+const VERIFY_EMAIL_OK: (&str, u16, &str) = ("/verify-email", 200, "Email verified");
+const ACCOUNT_EMAIL_OK: (&str, u16, &str) = ("/account-email", 200, "Verification email sent");
+const RESEND_VERIFICATION_OK: (&str, u16, &str) =
+    ("/resend-verification", 200, "Verification email sent");
+
+#[test]
+fn register_succeeds_without_a_session() {
+    let auth = FakeAuthServer::start(&[REGISTER_OK]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/account/register"))
+        .json(&json!({
+            "username": "nuevonombre",
+            "password_prehash": "deadbeef",
+            "email": "n@example.com"
+        }))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(body_json(response)["ok"], true);
+}
+
+#[test]
+fn register_rejects_empty_username() {
+    let server = TestServer::start();
+
+    let response = Client::new()
+        .post(server.url("/api/account/register"))
+        .json(&json!({"username": "", "password_prehash": "deadbeef", "email": null}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 422);
+}
+
+#[test]
+fn register_forwards_username_unavailable_verbatim() {
+    let auth = FakeAuthServer::start(&[(
+        "/register",
+        400,
+        r#"{"code":"USERNAME_UNAVAILABLE","message":"That username is unavailable.","request_id":"x"}"#,
+    )]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/account/register"))
+        .json(&json!({"username": "tomado", "password_prehash": "deadbeef", "email": null}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    assert_eq!(body_json(response)["code"], "USERNAME_UNAVAILABLE");
+}
+
+#[test]
+fn verify_email_succeeds_without_a_session() {
+    let auth = FakeAuthServer::start(&[VERIFY_EMAIL_OK]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .get(server.url("/api/account/verify-email?token=abc123"))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(body_json(response)["ok"], true);
+}
+
+#[test]
+fn verify_email_rejects_a_missing_token() {
+    let server = TestServer::start();
+
+    let response = Client::new()
+        .get(server.url("/api/account/verify-email"))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 422);
+}
+
+#[test]
+fn verify_email_forwards_invalid_token_verbatim() {
+    let auth = FakeAuthServer::start(&[(
+        "/verify-email",
+        400,
+        r#"{"code":"INVALID_TOKEN","message":"The token is invalid or expired.","request_id":"x"}"#,
+    )]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .get(server.url("/api/account/verify-email?token=bad"))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    assert_eq!(body_json(response)["code"], "INVALID_TOKEN");
+}
+
+#[test]
+fn account_email_succeeds_without_a_session() {
+    let auth = FakeAuthServer::start(&[ACCOUNT_EMAIL_OK]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/account/account-email"))
+        .json(&json!({"completion_token": "sometoken", "email": "n@example.com"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(body_json(response)["ok"], true);
+}
+
+#[test]
+fn account_email_rejects_empty_fields() {
+    let server = TestServer::start();
+
+    let response = Client::new()
+        .post(server.url("/api/account/account-email"))
+        .json(&json!({"completion_token": "", "email": "n@example.com"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 422);
+}
+
+#[test]
+fn resend_verification_succeeds_without_a_session() {
+    let auth = FakeAuthServer::start(&[RESEND_VERIFICATION_OK]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+    ]);
+
+    let response = Client::new()
+        .post(server.url("/api/account/resend-verification"))
+        .json(&json!({"completion_token": "sometoken"}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(body_json(response)["ok"], true);
+}
+
+#[test]
+fn resend_verification_rejects_an_empty_completion_token() {
+    let server = TestServer::start();
+
+    let response = Client::new()
+        .post(server.url("/api/account/resend-verification"))
+        .json(&json!({"completion_token": ""}))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 422);
+}
+
 // --- 005: 2FA/TOTP proxy tests ---
 
 const TOTP_CHALLENGE_ID: &str = "0123456789abcdef0123456789abcdef";

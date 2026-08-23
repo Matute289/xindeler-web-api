@@ -200,3 +200,30 @@ pub struct CharactersResponse {
 pub struct RenameCharacterRequest {
     pub new_alias: String,
 }
+
+/// No session required — used only during registration, before any session
+/// exists. `password_prehash` is the client-side prehash, forwarded to
+/// xindeler-auth's `password` field unchanged.
+#[derive(Debug, Deserialize)]
+pub struct RegisterRequest {
+    pub username: String,
+    pub password_prehash: String,
+    #[serde(default)]
+    pub email: Option<String>,
+}
+
+/// Legacy account-recovery flow (see `AuthModal`'s `legacyModal`): the
+/// `completion_token` is a short-lived bearer credential xindeler-auth
+/// issued alongside a `403 EMAIL_VERIFICATION_REQUIRED` login rejection —
+/// never a session cookie. No session required here either.
+#[derive(Debug, Deserialize)]
+pub struct AccountEmailRequest {
+    pub completion_token: String,
+    pub email: String,
+}
+
+/// Same `completion_token` credential as `AccountEmailRequest` above.
+#[derive(Debug, Deserialize)]
+pub struct ResendVerificationRequest {
+    pub completion_token: String,
+}
