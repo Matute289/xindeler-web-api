@@ -121,6 +121,7 @@ cookie de sesión válida. Total del repo: 56 tests (32 unitarios + 24 de integr
 |---|---|---|
 | D-01 | Env vars + proxy de Vite en `xindeler-web-landing` para desarrollo local real | `done` — `Matute289/xindeler-web-landing#41`. Las 5 llamadas same-origin (`waitlist`, `contribute`, `status`, `account/forgot-password`, `account/reset-password`) pasan de URL absoluta a ruta relativa `/api/...`; `vite.config.js` suma `server.proxy['/api']` con target configurable vía `VITE_API_PROXY_TARGET` (default: producción, mismo comportamiento de hoy) |
 | D-02 | `AuthModal.jsx` deja de descartar el resultado del login, primera versión de "hay alguien logueado" | `done` — ver detalle abajo |
+| D-03 | **`authclient.rs` no reenvía la IP real del caller a `xindeler-auth` en ninguna de sus llamadas** — todo el tráfico de la landing (login, 2FA, forgot/reset-password, change_password/username, delete_account, 2fa/*) le llega a auth como si viniera de una sola IP (la de este servicio) | `todo` — **prioridad, tomar apenas termine el trabajo en curso**. Hallazgo cross-repo de la sesión de `xindeler-auth`, 2026-08-22, durante el diseño de `xindeler-vinz-clortho` (gateway de login para el cliente nativo del juego, mismo problema que este repo ya tiene hoy en producción). Ver el detalle completo abajo. |
 
 **D-02, resuelto (2026-08-15).** El hallazgo original (`POST /api/session/login` colapsaba el `403
 EMAIL_VERIFICATION_REQUIRED` de `xindeler-auth` a un error genérico, rompiendo el modal de cuentas
@@ -158,6 +159,39 @@ Tests nuevos: `login_forwards_email_verification_required_verbatim_without_a_coo
 cookie, `completion_token`/`deadline` intactos) y
 `login_treats_an_unparseable_403_body_as_generic_invalid_credentials` (un 403 sin ese shape sigue
 siendo el genérico de siempre). Total del repo: 58 tests (32 unitarios + 26 de integración).
+
+**D-03, hallazgo (2026-08-22, cross-repo desde `xindeler-auth`), sin resolver todavía.**
+
+`server/src/authclient.rs` — **ninguna** de sus llamadas a `xindeler-auth` manda `X-Real-IP` (ni
+ningún otro header equivalente): `sign_in` (`:206`, `/generate_token`), `submit_2fa_code` (`:291`,
+`/login/2fa`), `verify` (`:313`), `issue_character_access_token` (`:343`), `change_username`
+(`:395`), `change_password` (`:422`), `delete_account` (`:445`), `forgot_password`/`reset_password`
+(`:465`/`:486`), y las cuatro de `2fa/*` (`:513`–`:582`). Todas van con `.json(&payload).send()` sin
+tocar los headers salientes.
+
+`xindeler-auth` rate-limita `/generate_token`/`/login/2fa`/etc. por IP (60 req/10min,
+`AUTH_RATE_LIMIT_MAX`/`WINDOW_SECS`) leyendo `X-Real-IP` **solo si** el caller está en
+`AUTH_TRUSTED_PROXIES` — si no manda ese header, usa la IP del socket, que para toda la landing es
+siempre la de este servicio. Resultado: **todo el login/2FA/recovery/cambio de cuenta de la landing
+hoy comparte un solo balde de rate limit contra auth**, sin importar cuántos usuarios reales estén
+pegando. No es teórico — está así en producción ahora mismo. (El lockout de cuenta por intentos
+fallidos, G-08, no se ve afectado — ese se indexa por uuid de cuenta, no por IP; lo que sí se ve
+afectado es el límite genérico por IP y el rastro de auditoría de `xindeler-auth`, donde cada línea
+`[AUDIT] login_fail ip=...` termina siendo la misma IP para cualquier intento que pase por acá.)
+
+**Este mismo repo ya resuelve el problema simétrico del lado de entrada** — `web.rs::remote()`
+(`:49`) ya confía en `X-Real-IP` que pone nginx (`$remote_addr`, pisando cualquier valor del
+cliente) cuando el peer está en la config de proxies confiables de este servicio. La IP real del
+caller ya está disponible en cada handler que llama a `authclient.rs` — el trabajo es threadearla
+hacia esas llamadas salientes (agregar `.header("X-Real-IP", ip.to_string())` a cada una, mismo
+valor que `remote()` ya resolvió para ese request) y agregar este servicio a
+`AUTH_TRUSTED_PROXIES` del lado de `xindeler-auth` si no corre en una IP ya cubierta por el default
+(`127.0.0.0/8,::1/128` — si `xindeler-web-api` corre en el mismo VPS que auth, loopback, puede que
+ya alcance sin tocar nada del lado de auth).
+
+**Prioridad:** Matías pidió que se tome apenas termine el trabajo en curso de este repo. Mismo
+patrón exacto que `xindeler-vinz-clortho` (el gateway nuevo para el cliente nativo del juego) ya
+está implementando desde cero — puede servir de referencia directa para el fix acá.
 
 ---
 
