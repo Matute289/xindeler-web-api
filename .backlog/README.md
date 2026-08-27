@@ -227,6 +227,34 @@ ya alcance sin tocar nada del lado de auth).
 patrón exacto que `xindeler-vinz-clortho` (el gateway nuevo para el cliente nativo del juego) ya
 está implementando desde cero — puede servir de referencia directa para el fix acá.
 
+**D-03, el pendiente de arriba cerrado del todo (2026-08-27) — el fix de código estaba neutralizado
+en producción, no solo faltaba sumar este servicio a `AUTH_TRUSTED_PROXIES`.** Investigando un bug
+no relacionado en `xindeler-auth` (Zuul no podía loguear una cuenta con 2FA), esa sesión auditó a
+qué dirección le habla cada consumidor colocado en el mismo VPS que `xindeler-auth` — y encontró
+que este servicio seguía usando `AUTH_PUBLIC_URL=https://auth.xindeler.com` pese a correr en el
+mismo VPS. Eso significa que, desde que se implementó el fix de arriba, el `X-Real-IP` real que
+`authclient.rs` ya manda en cada request salía igual, pero de ahí en más pasaba por
+`nginx` (`proxy_set_header X-Real-IP $remote_addr;`, la config real de
+`auth.xindeler.com`) — que **sobreescribe incondicionalmente** ese header con el peer TCP que le
+conecta a nginx. Para una conexión local de este servicio hacia la IP pública del propio VPS, ese
+peer termina siendo la IP pública del VPS mismo (confirmado empíricamente: un `curl` a
+`https://auth.xindeler.com/ping` corrido desde dentro del VPS devuelve `Ping! 216.238.126.97`, no
+`127.0.0.1`). O sea: el fix de este repo mandaba la IP real, pero nginx la pisaba con la IP del
+propio VPS un salto después, en el camino hacia `xindeler-auth` — el problema original de D-03
+(todo el tráfico de la landing indexado bajo una sola IP en el rate limit y el audit log de auth)
+seguía existiendo en producción, sin que nada de este lado lo pudiera ver.
+
+**Cambio aplicado (2026-08-27, del lado de `xindeler-auth`'s sesión, coordinado con Matías):**
+`AUTH_PUBLIC_URL` en `/opt/xindeler-web-api/.env` de producción cambiado a
+`http://127.0.0.1:19253` (loopback directo al puerto de `auth`, sin pasar por nginx). El peer que
+ve `auth` para esas conexiones es `127.0.0.1` — ya cubierto por el default de
+`AUTH_TRUSTED_PROXIES` (`127.0.0.0/8,::1/128`), así que no hizo falta ningún cambio de config del
+lado de `xindeler-auth` más allá de este `.env`. Sin cambios de código en ningún repo — el gap era
+puramente de configuración. Backup del `.env` original guardado junto al archivo, servicio
+reiniciado limpio (`systemctl restart xindeler-web-api.service`, SIGTERM ordenado, 0 migraciones
+pendientes, arriba de nuevo en `127.0.0.1:8020`). Ver también la entrada espejo en el backlog de
+`xindeler-auth`.
+
 ---
 
 ## Fase E — Proxy de 2FA/TOTP para la pantalla de cuenta (005 de `xindeler-web-landing`, 2026-08-15)
