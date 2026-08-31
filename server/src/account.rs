@@ -618,3 +618,40 @@ pub fn rename_character(
         Err(err) => map_game_server_error(err),
     }
 }
+
+pub fn character_portrait(
+    request: &Request,
+    character_id: i64,
+    remote_ip: IpAddr,
+    state: &AppState,
+) -> Result<Response, ApiError> {
+    let identity = resolve_session(request)?;
+    let uuid = session_uuid(&identity.uuid)?;
+    let token = state
+        .auth_client
+        .issue_character_access_token(remote_ip, uuid)
+        .map_err(map_character_token_error)?;
+    let if_none_match = request.header("If-None-Match");
+    match state
+        .game_server_client
+        .get_character_portrait(token, character_id, if_none_match)
+    {
+        Ok(portrait) => {
+            let mut response = Response::bytes(
+                portrait
+                    .content_type
+                    .unwrap_or_else(|| "application/octet-stream".to_owned()),
+                portrait.data,
+            )
+            .with_status_code(portrait.status);
+            if let Some(etag) = portrait.etag {
+                response = response.with_unique_header("ETag", etag);
+            }
+            if let Some(retry_after) = portrait.retry_after {
+                response = response.with_unique_header("Retry-After", retry_after);
+            }
+            Ok(response)
+        }
+        Err(err) => map_game_server_error(err),
+    }
+}

@@ -72,6 +72,13 @@ fn character_rename_path(path: &str) -> Option<i64> {
         .ok()
 }
 
+fn character_portrait_path(path: &str) -> Option<i64> {
+    path.strip_prefix("/api/account/characters/")?
+        .strip_suffix("/portrait")?
+        .parse()
+        .ok()
+}
+
 /// The body is already read by the HTTP adapter; this only surfaces a
 /// failure at the point a handler asks for it.
 fn take_request_data(request: &Request) -> Result<&[u8], ApiError> {
@@ -166,6 +173,15 @@ fn dispatch(request: &Request, state: &AppState, network: &NetworkConfig) -> Res
                         account::rename_character(body, request, character_id, remote_ip, state)
                     })
                     .unwrap_or_else(error::response),
+                None => Response::empty_404(),
+            }
+        }
+        ("GET", path) if character_portrait_path(path).is_some() => {
+            match character_portrait_path(path) {
+                Some(character_id) => {
+                    account::character_portrait(request, character_id, remote_ip, state)
+                        .unwrap_or_else(error::response)
+                }
                 None => Response::empty_404(),
             }
         }

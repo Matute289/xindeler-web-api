@@ -1672,6 +1672,64 @@ fn list_characters_forwards_upstream_unavailability_as_502() {
     assert_eq!(body_json(response)["code"], "UPSTREAM_ERROR");
 }
 
+#[test]
+fn character_portrait_proxies_image_bytes_and_status() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ISSUE_CHARACTER_TOKEN_OK]);
+    let game_server = FakeAuthServer::start(&[(
+        "/player_api/v1/characters/1/portrait",
+        200,
+        "fake-image-bytes",
+    )]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+        ("WEB_API_SERVICE_TOKEN", WEB_API_SERVICE_TOKEN),
+        ("WEB_API_GAME_SERVER_PLAYER_API_URL", &game_server.base_url),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .get(server.url("/api/account/characters/1/portrait"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.bytes().unwrap().as_ref(), b"fake-image-bytes");
+}
+
+#[test]
+fn character_portrait_forwards_a_404_as_a_plain_404() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ISSUE_CHARACTER_TOKEN_OK]);
+    let game_server = FakeAuthServer::start(&[("/player_api/v1/characters/1/portrait", 404, "")]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+        ("WEB_API_SERVICE_TOKEN", WEB_API_SERVICE_TOKEN),
+        ("WEB_API_GAME_SERVER_PLAYER_API_URL", &game_server.base_url),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .get(server.url("/api/account/characters/1/portrait"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 404);
+}
+
+#[test]
+fn character_portrait_requires_a_session() {
+    let server = TestServer::start();
+
+    let response = Client::new()
+        .get(server.url("/api/account/characters/1/portrait"))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 401);
+}
+
 // --- D-03: authclient.rs forwards the real caller IP as X-Real-IP to
 // xindeler-auth, instead of every request looking like it came from this
 // service. `TestServer::start`'s default WEB_API_TRUSTED_PROXIES
