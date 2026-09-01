@@ -179,6 +179,11 @@ pub struct Location {
 /// this is a straight proxy of the game server's own response shape, not a
 /// re-derived one, so a mismatch here would silently corrupt every
 /// character-list read.
+///
+/// `race` is `#[serde(default)]`: the game server does not expose it in
+/// `CharacterSummaryDto` yet (2026-08-31), so every real response omits the
+/// key entirely today. Without the default, deserializing any real response
+/// would fail outright the moment this field was added.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CharacterSummary {
     pub character_id: i64,
@@ -186,11 +191,33 @@ pub struct CharacterSummary {
     pub level: u32,
     pub class: String,
     pub location: Option<Location>,
+    #[serde(default)]
+    pub race: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct CharactersResponse {
     pub characters: Vec<CharacterSummary>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CharacterSummary;
+
+    #[test]
+    fn character_summary_defaults_race_to_none_when_the_field_is_absent() {
+        let json =
+            r#"{"character_id":1,"name":"Aragorn","level":5,"class":"Warrior","location":null}"#;
+        let summary: CharacterSummary = serde_json::from_str(json).unwrap();
+        assert_eq!(summary.race, None);
+    }
+
+    #[test]
+    fn character_summary_deserializes_race_when_present() {
+        let json = r#"{"character_id":1,"name":"Aragorn","level":5,"class":"Warrior","location":null,"race":"Human"}"#;
+        let summary: CharacterSummary = serde_json::from_str(json).unwrap();
+        assert_eq!(summary.race.as_deref(), Some("Human"));
+    }
 }
 
 /// Requires an active session — `identity.uuid` is what actually authorizes

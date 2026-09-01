@@ -19,3 +19,4 @@
 
 # Local isolated development worktrees
 .worktrees/
+.worktrees/

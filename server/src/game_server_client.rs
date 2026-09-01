@@ -46,6 +46,19 @@ struct RenameCharacterBody<'a> {
     new_alias: &'a str,
 }
 
+/// Every field the portrait proxy (Task 3) needs to forward. Unlike
+/// `list_characters`/`rename_character`, a non-2xx status here is *not* an
+/// error to react to — 304/404/503 are all documented, valid outcomes the
+/// caller forwards as-is (see `docs/superpowers/specs/2026-08-31-campfire-character-scene-design.md`).
+/// Only a genuine network/connection failure becomes a `GameServerClientError`.
+pub struct PortraitResponse {
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub etag: Option<String>,
+    pub retry_after: Option<String>,
+    pub data: Vec<u8>,
+}
+
 pub struct GameServerClient {
     client: reqwest::blocking::Client,
     base_url: String,
@@ -104,5 +117,51 @@ impl GameServerClient {
             return Err(rejected(status.as_u16(), response));
         }
         Ok(())
+    }
+
+    /// `if_none_match` is the caller's own `If-None-Match` request header,
+    /// forwarded upstream so the game server can answer 304 instead of
+    /// re-sending unchanged image bytes.
+    pub fn get_character_portrait(
+        &self,
+        token: CharacterAccessToken,
+        character_id: i64,
+        if_none_match: Option<&str>,
+    ) -> Result<PortraitResponse, GameServerClientError> {
+        let mut request = self
+            .client
+            .get(format!(
+                "{}/player_api/v1/characters/{character_id}/portrait",
+                self.base_url
+            ))
+            .bearer_auth(token.serialize());
+        if let Some(etag) = if_none_match {
+            request = request.header("If-None-Match", etag);
+        }
+        let response = request.send()?;
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let data = response.bytes()?.to_vec();
+        Ok(PortraitResponse {
+            status,
+            content_type,
+            etag,
+            retry_after,
+            data,
+        })
     }
 }

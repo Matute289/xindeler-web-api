@@ -163,6 +163,19 @@ impl Response {
         }
     }
 
+    /// Unlike `text`/`json`, the content type is caller-supplied — this
+    /// exists for proxying an upstream response's bytes verbatim (the
+    /// portrait endpoint), where the right `Content-Type` (e.g.
+    /// `image/webp`) comes from that upstream response, not from a fixed
+    /// choice made here.
+    pub fn bytes<S: Into<Cow<'static, str>>>(content_type: S, data: Vec<u8>) -> Response {
+        Response {
+            status_code: 200,
+            headers: vec![("Content-Type".into(), content_type.into())],
+            data,
+        }
+    }
+
     pub fn empty_204() -> Response {
         Response {
             status_code: 204,
@@ -214,7 +227,10 @@ impl Response {
         self
     }
 
-    #[cfg(test)]
+    /// Case-insensitive header lookup; the first occurrence wins. Used
+    /// outside tests too -- `web::privacy_headers()` reads this to tell
+    /// whether a handler already set its own `Cache-Control` before
+    /// deciding whether to overwrite it with the default `no-store`.
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()

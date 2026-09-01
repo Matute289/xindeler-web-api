@@ -329,6 +329,17 @@ impl FakeAuthServer {
             (name.trim().eq_ignore_ascii_case("x-real-ip")).then(|| value.trim().to_owned())
         })
     }
+
+    /// Same pattern as `last_x_real_ip()` above, for `If-None-Match` —
+    /// proves `GameServerClient::get_character_portrait` actually forwards
+    /// the caller's conditional-request header upstream.
+    fn last_if_none_match(&self) -> Option<String> {
+        let request = self.last_request.lock().unwrap().clone()?;
+        request.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            (name.trim().eq_ignore_ascii_case("if-none-match")).then(|| value.trim().to_owned())
+        })
+    }
 }
 
 impl Drop for FakeAuthServer {
@@ -1670,6 +1681,155 @@ fn list_characters_forwards_upstream_unavailability_as_502() {
         .unwrap();
     assert_eq!(response.status(), 502);
     assert_eq!(body_json(response)["code"], "UPSTREAM_ERROR");
+}
+
+#[test]
+fn character_portrait_proxies_image_bytes_and_status() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ISSUE_CHARACTER_TOKEN_OK]);
+    let game_server = FakeAuthServer::start(&[(
+        "/player_api/v1/characters/1/portrait",
+        200,
+        "fake-image-bytes",
+    )]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+        ("WEB_API_SERVICE_TOKEN", WEB_API_SERVICE_TOKEN),
+        ("WEB_API_GAME_SERVER_PLAYER_API_URL", &game_server.base_url),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .get(server.url("/api/account/characters/1/portrait"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.bytes().unwrap().as_ref(), b"fake-image-bytes");
+}
+
+#[test]
+fn character_portrait_forwards_a_404_as_a_plain_404() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ISSUE_CHARACTER_TOKEN_OK]);
+    let game_server = FakeAuthServer::start(&[("/player_api/v1/characters/1/portrait", 404, "")]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+        ("WEB_API_SERVICE_TOKEN", WEB_API_SERVICE_TOKEN),
+        ("WEB_API_GAME_SERVER_PLAYER_API_URL", &game_server.base_url),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .get(server.url("/api/account/characters/1/portrait"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 404);
+}
+
+#[test]
+fn character_portrait_requires_a_session() {
+    let server = TestServer::start();
+
+    let response = Client::new()
+        .get(server.url("/api/account/characters/1/portrait"))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 401);
+}
+
+#[test]
+fn character_portrait_maps_an_unexpected_upstream_status_to_502() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ISSUE_CHARACTER_TOKEN_OK]);
+    let game_server = FakeAuthServer::start(&[(
+        "/player_api/v1/characters/1/portrait",
+        500,
+        "internal game server panic: persistence layer stack trace",
+    )]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+        ("WEB_API_SERVICE_TOKEN", WEB_API_SERVICE_TOKEN),
+        ("WEB_API_GAME_SERVER_PLAYER_API_URL", &game_server.base_url),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .get(server.url("/api/account/characters/1/portrait"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 502);
+    let body = body_json(response);
+    assert_eq!(body["code"], "UPSTREAM_ERROR");
+    // The upstream's plain-text body must never reach the client -- only the
+    // generic catalog message from `error::public_fields()`.
+    assert!(!body["message"]
+        .as_str()
+        .unwrap()
+        .contains("persistence layer stack trace"));
+}
+
+#[test]
+fn character_portrait_forwards_if_none_match_to_the_game_server() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ISSUE_CHARACTER_TOKEN_OK]);
+    let game_server = FakeAuthServer::start(&[("/player_api/v1/characters/1/portrait", 304, "")]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+        ("WEB_API_SERVICE_TOKEN", WEB_API_SERVICE_TOKEN),
+        ("WEB_API_GAME_SERVER_PLAYER_API_URL", &game_server.base_url),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .get(server.url("/api/account/characters/1/portrait"))
+        .header("Cookie", &cookie)
+        .header("If-None-Match", "\"abc123\"")
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 304);
+    assert_eq!(
+        game_server.last_if_none_match().as_deref(),
+        Some("\"abc123\"")
+    );
+}
+
+#[test]
+fn character_portrait_sets_a_private_cache_control_instead_of_no_store() {
+    let auth = FakeAuthServer::start(&[SIGN_IN_OK, VERIFY_OK, ISSUE_CHARACTER_TOKEN_OK]);
+    let game_server = FakeAuthServer::start(&[(
+        "/player_api/v1/characters/1/portrait",
+        200,
+        "fake-image-bytes",
+    )]);
+    let server = TestServer::start_with(&[
+        ("AUTH_PUBLIC_URL", &auth.base_url),
+        ("AUTH_SERVICE_TOKEN", SERVICE_TOKEN),
+        ("WEB_API_SERVICE_TOKEN", WEB_API_SERVICE_TOKEN),
+        ("WEB_API_GAME_SERVER_PLAYER_API_URL", &game_server.base_url),
+    ]);
+    let client = Client::new();
+    let cookie = login_and_get_cookie(&server, &client);
+
+    let response = client
+        .get(server.url("/api/account/characters/1/portrait"))
+        .header("Cookie", &cookie)
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok()),
+        Some("private, max-age=300")
+    );
 }
 
 // --- D-03: authclient.rs forwards the real caller IP as X-Real-IP to

@@ -72,6 +72,13 @@ fn character_rename_path(path: &str) -> Option<i64> {
         .ok()
 }
 
+fn character_portrait_path(path: &str) -> Option<i64> {
+    path.strip_prefix("/api/account/characters/")?
+        .strip_suffix("/portrait")?
+        .parse()
+        .ok()
+}
+
 /// The body is already read by the HTTP adapter; this only surfaces a
 /// failure at the point a handler asks for it.
 fn take_request_data(request: &Request) -> Result<&[u8], ApiError> {
@@ -169,6 +176,15 @@ fn dispatch(request: &Request, state: &AppState, network: &NetworkConfig) -> Res
                 None => Response::empty_404(),
             }
         }
+        ("GET", path) if character_portrait_path(path).is_some() => {
+            match character_portrait_path(path) {
+                Some(character_id) => {
+                    account::character_portrait(request, character_id, remote_ip, state)
+                        .unwrap_or_else(error::response)
+                }
+                None => Response::empty_404(),
+            }
+        }
         _ => Response::empty_404(),
     };
 
@@ -179,9 +195,17 @@ fn request_path(raw_url: &str) -> &str {
     raw_url.split('?').next().unwrap_or("/")
 }
 
+/// `Cache-Control` is check-then-set, not unconditional like the other two:
+/// the portrait endpoint sets its own (`private, max-age=300`, so
+/// `If-None-Match` revalidation actually reaches the browser cache) and
+/// needs it to survive this pass. Every other handler leaves `Cache-Control`
+/// unset, so this changes nothing for them -- they still get `no-store`.
 fn privacy_headers(response: Response) -> Response {
+    let response = match response.header("Cache-Control") {
+        Some(_) => response,
+        None => response.with_unique_header("Cache-Control", "no-store"),
+    };
     response
-        .with_unique_header("Cache-Control", "no-store")
         .with_unique_header("Pragma", "no-cache")
         .with_unique_header("Referrer-Policy", "no-referrer")
 }

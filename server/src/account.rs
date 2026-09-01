@@ -618,3 +618,83 @@ pub fn rename_character(
         Err(err) => map_game_server_error(err),
     }
 }
+
+/// A buggy or compromised game server forwarding e.g. `text/html` or
+/// `image/svg+xml` (script-capable) verbatim would have those bytes served
+/// on this service's own origin, right next to the session cookie -- so only
+/// an actual image format is ever forwarded as-is.
+const ALLOWED_PORTRAIT_CONTENT_TYPES: [&str; 3] = ["image/webp", "image/png", "image/jpeg"];
+
+/// Matches the endpoint's documented cache contract: private (never a shared
+/// cache) for 5 minutes. Set explicitly here rather than left to
+/// `web::finalize()`'s default `no-store` -- without it the browser would
+/// never store the response or send `If-None-Match` back, making the 304
+/// path below unreachable in practice.
+const PORTRAIT_CACHE_CONTROL: &str = "private, max-age=300";
+
+pub fn character_portrait(
+    request: &Request,
+    character_id: i64,
+    remote_ip: IpAddr,
+    state: &AppState,
+) -> Result<Response, ApiError> {
+    let identity = resolve_session(request)?;
+    let uuid = session_uuid(&identity.uuid)?;
+    let token = state
+        .auth_client
+        .issue_character_access_token(remote_ip, uuid)
+        .map_err(map_character_token_error)?;
+    let if_none_match = request.header("If-None-Match");
+    match state
+        .game_server_client
+        .get_character_portrait(token, character_id, if_none_match)
+    {
+        // 304/404/503 are documented, valid outcomes (see
+        // `PortraitResponse`'s doc comment) -- forwarded with only the
+        // headers that outcome actually carries, never the upstream's body.
+        // Anything else (500 included) is the same "understood but not a
+        // sanctioned shape" case `map_game_server_error` treats as a leak
+        // risk for every other game-server call in this file.
+        Ok(portrait) => match portrait.status {
+            200 => {
+                let content_type = portrait
+                    .content_type
+                    .filter(|content_type| {
+                        ALLOWED_PORTRAIT_CONTENT_TYPES.contains(&content_type.as_str())
+                    })
+                    .unwrap_or_else(|| "application/octet-stream".to_owned());
+                let mut response = Response::bytes(content_type, portrait.data)
+                    .with_unique_header("Cache-Control", PORTRAIT_CACHE_CONTROL);
+                if let Some(etag) = portrait.etag {
+                    response = response.with_unique_header("ETag", etag);
+                }
+                Ok(response)
+            }
+            304 => {
+                // `empty_204()` is reused purely for its no-body/no-header
+                // shape, not because this is actually a 204 -- overwritten
+                // right below.
+                let mut response = Response::empty_204()
+                    .with_status_code(304)
+                    .with_unique_header("Cache-Control", PORTRAIT_CACHE_CONTROL);
+                if let Some(etag) = portrait.etag {
+                    response = response.with_unique_header("ETag", etag);
+                }
+                Ok(response)
+            }
+            404 => Ok(Response::empty_404()),
+            503 => {
+                let mut response = Response::empty_204().with_status_code(503);
+                if let Some(retry_after) = portrait.retry_after {
+                    response = response.with_unique_header("Retry-After", retry_after);
+                }
+                Ok(response)
+            }
+            status => {
+                log::warn!("game server portrait answered with unexpected status {status}");
+                Err(ApiError::UpstreamGameServerError)
+            }
+        },
+        Err(err) => map_game_server_error(err),
+    }
+}
