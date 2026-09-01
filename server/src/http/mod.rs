@@ -227,7 +227,10 @@ impl Response {
         self
     }
 
-    #[cfg(test)]
+    /// Case-insensitive header lookup; the first occurrence wins. Used
+    /// outside tests too -- `web::privacy_headers()` reads this to tell
+    /// whether a handler already set its own `Cache-Control` before
+    /// deciding whether to overwrite it with the default `no-store`.
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()

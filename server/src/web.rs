@@ -195,9 +195,17 @@ fn request_path(raw_url: &str) -> &str {
     raw_url.split('?').next().unwrap_or("/")
 }
 
+/// `Cache-Control` is check-then-set, not unconditional like the other two:
+/// the portrait endpoint sets its own (`private, max-age=300`, so
+/// `If-None-Match` revalidation actually reaches the browser cache) and
+/// needs it to survive this pass. Every other handler leaves `Cache-Control`
+/// unset, so this changes nothing for them -- they still get `no-store`.
 fn privacy_headers(response: Response) -> Response {
+    let response = match response.header("Cache-Control") {
+        Some(_) => response,
+        None => response.with_unique_header("Cache-Control", "no-store"),
+    };
     response
-        .with_unique_header("Cache-Control", "no-store")
         .with_unique_header("Pragma", "no-cache")
         .with_unique_header("Referrer-Policy", "no-referrer")
 }
