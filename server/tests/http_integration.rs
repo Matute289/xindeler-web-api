@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -265,6 +265,10 @@ struct FakeAuthServer {
     /// server received — read by `last_x_real_ip()` (D-03) to assert
     /// `authclient.rs` actually forwards the caller's real IP.
     last_request: Arc<Mutex<Option<String>>>,
+    /// Count of accepted connections — read by `request_count()` to prove a
+    /// caller's cache (positive or negative) actually suppressed a refetch
+    /// instead of hitting this server again.
+    request_count: Arc<AtomicUsize>,
 }
 
 impl FakeAuthServer {
@@ -278,11 +282,14 @@ impl FakeAuthServer {
         let stop_clone = Arc::clone(&stop);
         let last_request = Arc::new(Mutex::new(None));
         let last_request_clone = Arc::clone(&last_request);
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let request_count_clone = Arc::clone(&request_count);
 
         let handle = thread::spawn(move || {
             while !stop_clone.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        request_count_clone.fetch_add(1, Ordering::Relaxed);
                         stream.set_nonblocking(false).unwrap();
                         let mut buf = [0_u8; 4096];
                         let n = stream.read(&mut buf).unwrap_or(0);
@@ -317,7 +324,13 @@ impl FakeAuthServer {
             stop,
             handle: Some(handle),
             last_request,
+            request_count,
         }
+    }
+
+    /// Number of connections this server has accepted so far.
+    fn request_count(&self) -> usize {
+        self.request_count.load(Ordering::Relaxed)
     }
 
     /// The `X-Real-IP` header value on the last request received, if any —
@@ -1897,4 +1910,162 @@ fn register_forwards_the_real_caller_ip_as_x_real_ip() {
         .unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(auth.last_x_real_ip().as_deref(), Some("198.51.100.77"));
+}
+
+// --- Download resolver: GET /api/download ---
+
+const SAMPLE_MANIFEST: &str = r#"{
+    "version": "v0.25.0",
+    "platforms": [
+        {"os": "windows", "arch": "x86_64", "file": "xindeler-voxygen-windows-x86_64.zip"},
+        {"os": "macos", "arch": "arm64", "file": "xindeler-voxygen-macos-arm64.dmg"}
+    ]
+}"#;
+
+#[test]
+fn download_resolves_via_explicit_os_and_arch_params() {
+    let manifest_server = FakeAuthServer::start(&[("/latest.json", 200, SAMPLE_MANIFEST)]);
+    let server = TestServer::start_with(&[(
+        "WEB_API_DOWNLOADS_MANIFEST_URL",
+        &format!("{}/latest.json", manifest_server.base_url),
+    )]);
+    let response = Client::new()
+        .get(server.url("/api/download?os=windows&arch=x86_64"))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body = body_json(response);
+    assert_eq!(body["ok"], true);
+    assert_eq!(
+        body["download_url"],
+        "https://downloads.xindeler.com/releases/v0.25.0/xindeler-voxygen-windows-x86_64.zip"
+    );
+    assert_eq!(body["version"], "v0.25.0");
+}
+
+#[test]
+fn download_auto_detects_a_full_match_from_the_user_agent() {
+    let manifest_server = FakeAuthServer::start(&[("/latest.json", 200, SAMPLE_MANIFEST)]);
+    let server = TestServer::start_with(&[(
+        "WEB_API_DOWNLOADS_MANIFEST_URL",
+        &format!("{}/latest.json", manifest_server.base_url),
+    )]);
+    let response = Client::new()
+        .get(server.url("/api/download"))
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        )
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body = body_json(response);
+    assert_eq!(body["ok"], true);
+    assert_eq!(
+        body["download_url"],
+        "https://downloads.xindeler.com/releases/v0.25.0/xindeler-voxygen-windows-x86_64.zip"
+    );
+}
+
+#[test]
+fn download_auto_detects_from_the_user_agent_when_no_params_given() {
+    let manifest_server = FakeAuthServer::start(&[("/latest.json", 200, SAMPLE_MANIFEST)]);
+    let server = TestServer::start_with(&[(
+        "WEB_API_DOWNLOADS_MANIFEST_URL",
+        &format!("{}/latest.json", manifest_server.base_url),
+    )]);
+    let response = Client::new()
+        .get(server.url("/api/download"))
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+        )
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    // This UA has no ARM64/aarch64 marker (the documented ambiguous case),
+    // so arch defaults to x86_64 -- which this sample manifest doesn't have
+    // for macOS, proving detection ran rather than short-circuiting.
+    assert_eq!(body_json(response)["ok"], false);
+}
+
+#[test]
+fn download_returns_ok_false_for_an_unrecognized_user_agent() {
+    let manifest_server = FakeAuthServer::start(&[("/latest.json", 200, SAMPLE_MANIFEST)]);
+    let server = TestServer::start_with(&[(
+        "WEB_API_DOWNLOADS_MANIFEST_URL",
+        &format!("{}/latest.json", manifest_server.base_url),
+    )]);
+    let response = Client::new()
+        .get(server.url("/api/download"))
+        .header("User-Agent", "curl/8.4.0")
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(body_json(response)["ok"], false);
+}
+
+#[test]
+fn download_returns_ok_false_when_the_manifest_is_unreachable() {
+    let server = TestServer::start_with(&[(
+        "WEB_API_DOWNLOADS_MANIFEST_URL",
+        "http://127.0.0.1:1/latest.json",
+    )]);
+    let response = Client::new()
+        .get(server.url("/api/download?os=windows&arch=x86_64"))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(body_json(response)["ok"], false);
+}
+
+#[test]
+fn a_manifest_fetch_failure_is_cached_and_not_retried_within_the_negative_ttl() {
+    let manifest_server = FakeAuthServer::start(&[("/latest.json", 500, "boom")]);
+    let server = TestServer::start_with(&[(
+        "WEB_API_DOWNLOADS_MANIFEST_URL",
+        &format!("{}/latest.json", manifest_server.base_url),
+    )]);
+    let client = Client::new();
+
+    let first = client
+        .get(server.url("/api/download?os=windows&arch=x86_64"))
+        .send()
+        .unwrap();
+    assert_eq!(body_json(first)["ok"], false);
+
+    let second = client
+        .get(server.url("/api/download?os=windows&arch=x86_64"))
+        .send()
+        .unwrap();
+    assert_eq!(body_json(second)["ok"], false);
+
+    // A second request within the negative-cache TTL must not hit the
+    // manifest host again -- proves the failure itself got cached, not just
+    // its `{ok: false}` result.
+    assert_eq!(manifest_server.request_count(), 1);
+}
+
+#[test]
+fn a_successful_manifest_fetch_is_cached_and_not_refetched_within_the_ttl() {
+    let manifest_server = FakeAuthServer::start(&[("/latest.json", 200, SAMPLE_MANIFEST)]);
+    let server = TestServer::start_with(&[(
+        "WEB_API_DOWNLOADS_MANIFEST_URL",
+        &format!("{}/latest.json", manifest_server.base_url),
+    )]);
+    let client = Client::new();
+
+    let first = client
+        .get(server.url("/api/download?os=windows&arch=x86_64"))
+        .send()
+        .unwrap();
+    assert_eq!(body_json(first)["ok"], true);
+
+    let second = client
+        .get(server.url("/api/download?os=windows&arch=x86_64"))
+        .send()
+        .unwrap();
+    assert_eq!(body_json(second)["ok"], true);
+
+    assert_eq!(manifest_server.request_count(), 1);
 }

@@ -6,6 +6,7 @@ mod cache;
 mod config;
 mod db;
 mod digest;
+mod download;
 mod error;
 mod game_server_client;
 mod http;
