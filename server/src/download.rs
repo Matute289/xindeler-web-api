@@ -1,4 +1,6 @@
-use serde::Deserialize;
+use crate::http::{Request, Response};
+use crate::state::AppState;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 const DOWNLOADS_BASE_URL: &str = "https://downloads.xindeler.com";
@@ -97,6 +99,65 @@ pub(crate) fn download_url(manifest: &Manifest, platform: &Platform) -> String {
         "{DOWNLOADS_BASE_URL}/releases/{}/{}",
         manifest.version, platform.file
     )
+}
+
+#[derive(Serialize)]
+struct DownloadResolution {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    download_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+}
+
+impl DownloadResolution {
+    fn not_found() -> Self {
+        Self {
+            ok: false,
+            download_url: None,
+            version: None,
+        }
+    }
+
+    fn found(manifest: &Manifest, platform: &Platform) -> Self {
+        Self {
+            ok: true,
+            download_url: Some(download_url(manifest, platform)),
+            version: Some(manifest.version.clone()),
+        }
+    }
+}
+
+/// Never returns an error -- a missing manifest, a network failure, and "no
+/// matching platform" are all the same `{ok: false}` (still HTTP 200)
+/// outcome, so there is no error state for the router to map.
+pub fn resolve_download(request: &Request, state: &AppState) -> Response {
+    let manifest = match state.downloads_manifest_cache.get() {
+        Some(manifest) => Some(manifest),
+        None => {
+            let fetched = state.downloads_manifest_client.fetch_manifest();
+            if let Some(manifest) = &fetched {
+                state.downloads_manifest_cache.set(manifest.clone());
+            }
+            fetched
+        }
+    };
+    let Some(manifest) = manifest else {
+        return Response::json(&DownloadResolution::not_found());
+    };
+
+    let user_agent = request.header("User-Agent").unwrap_or("");
+    let os = request
+        .get_param("os")
+        .unwrap_or_else(|| detect_os(user_agent).unwrap_or("").to_owned());
+    let arch = request
+        .get_param("arch")
+        .unwrap_or_else(|| detect_arch(user_agent).to_owned());
+
+    match resolve_platform(&manifest, &os, &arch) {
+        Some(platform) => Response::json(&DownloadResolution::found(&manifest, platform)),
+        None => Response::json(&DownloadResolution::not_found()),
+    }
 }
 
 #[cfg(test)]

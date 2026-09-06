@@ -90,6 +90,11 @@ pub struct AppConfig {
     /// probes, not an HTTP endpoint. Defaults to that repo's own
     /// `server-cli` default `web_address` port (14005).
     pub game_server_player_api_url: String,
+    /// Base URL for `xindeler-new-horizon`'s release manifest (NH-58) --
+    /// fetched and cached in-memory, never hit per-request. Defaults to the
+    /// real production manifest; tests override this to point at a fake
+    /// server instead.
+    pub downloads_manifest_url: String,
 }
 
 impl AppConfig {
@@ -232,6 +237,11 @@ impl AppConfig {
             .cloned()
             .unwrap_or_else(|| "http://127.0.0.1:14005".to_owned());
 
+        let downloads_manifest_url = values
+            .get("WEB_API_DOWNLOADS_MANIFEST_URL")
+            .cloned()
+            .unwrap_or_else(|| "https://downloads.xindeler.com/latest.json".to_owned());
+
         Ok(Self {
             bind_addr,
             http_workers,
@@ -253,6 +263,7 @@ impl AppConfig {
             auth_service_token,
             web_api_service_token,
             game_server_player_api_url,
+            downloads_manifest_url,
         })
     }
 }
@@ -285,6 +296,7 @@ impl std::fmt::Debug for AppConfig {
                 "game_server_player_api_url",
                 &self.game_server_player_api_url,
             )
+            .field("downloads_manifest_url", &self.downloads_manifest_url)
             .finish()
     }
 }

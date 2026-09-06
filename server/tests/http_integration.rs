@@ -1898,3 +1898,110 @@ fn register_forwards_the_real_caller_ip_as_x_real_ip() {
     assert_eq!(response.status(), 200);
     assert_eq!(auth.last_x_real_ip().as_deref(), Some("198.51.100.77"));
 }
+
+// --- Download resolver: GET /api/download ---
+
+const SAMPLE_MANIFEST: &str = r#"{
+    "version": "v0.25.0",
+    "platforms": [
+        {"os": "windows", "arch": "x86_64", "file": "xindeler-voxygen-windows-x86_64.zip"},
+        {"os": "macos", "arch": "arm64", "file": "xindeler-voxygen-macos-arm64.dmg"}
+    ]
+}"#;
+
+#[test]
+fn download_resolves_via_explicit_os_and_arch_params() {
+    let manifest_server = FakeAuthServer::start(&[("/latest.json", 200, SAMPLE_MANIFEST)]);
+    let server = TestServer::start_with(&[(
+        "WEB_API_DOWNLOADS_MANIFEST_URL",
+        &format!("{}/latest.json", manifest_server.base_url),
+    )]);
+    let response = Client::new()
+        .get(server.url("/api/download?os=windows&arch=x86_64"))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body = body_json(response);
+    assert_eq!(body["ok"], true);
+    assert_eq!(
+        body["download_url"],
+        "https://downloads.xindeler.com/releases/v0.25.0/xindeler-voxygen-windows-x86_64.zip"
+    );
+    assert_eq!(body["version"], "v0.25.0");
+}
+
+#[test]
+fn download_auto_detects_a_full_match_from_the_user_agent() {
+    let manifest_server = FakeAuthServer::start(&[("/latest.json", 200, SAMPLE_MANIFEST)]);
+    let server = TestServer::start_with(&[(
+        "WEB_API_DOWNLOADS_MANIFEST_URL",
+        &format!("{}/latest.json", manifest_server.base_url),
+    )]);
+    let response = Client::new()
+        .get(server.url("/api/download"))
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        )
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body = body_json(response);
+    assert_eq!(body["ok"], true);
+    assert_eq!(
+        body["download_url"],
+        "https://downloads.xindeler.com/releases/v0.25.0/xindeler-voxygen-windows-x86_64.zip"
+    );
+}
+
+#[test]
+fn download_auto_detects_from_the_user_agent_when_no_params_given() {
+    let manifest_server = FakeAuthServer::start(&[("/latest.json", 200, SAMPLE_MANIFEST)]);
+    let server = TestServer::start_with(&[(
+        "WEB_API_DOWNLOADS_MANIFEST_URL",
+        &format!("{}/latest.json", manifest_server.base_url),
+    )]);
+    let response = Client::new()
+        .get(server.url("/api/download"))
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+        )
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    // This UA has no ARM64/aarch64 marker (the documented ambiguous case),
+    // so arch defaults to x86_64 -- which this sample manifest doesn't have
+    // for macOS, proving detection ran rather than short-circuiting.
+    assert_eq!(body_json(response)["ok"], false);
+}
+
+#[test]
+fn download_returns_ok_false_for_an_unrecognized_user_agent() {
+    let manifest_server = FakeAuthServer::start(&[("/latest.json", 200, SAMPLE_MANIFEST)]);
+    let server = TestServer::start_with(&[(
+        "WEB_API_DOWNLOADS_MANIFEST_URL",
+        &format!("{}/latest.json", manifest_server.base_url),
+    )]);
+    let response = Client::new()
+        .get(server.url("/api/download"))
+        .header("User-Agent", "curl/8.4.0")
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(body_json(response)["ok"], false);
+}
+
+#[test]
+fn download_returns_ok_false_when_the_manifest_is_unreachable() {
+    let server = TestServer::start_with(&[(
+        "WEB_API_DOWNLOADS_MANIFEST_URL",
+        "http://127.0.0.1:1/latest.json",
+    )]);
+    let response = Client::new()
+        .get(server.url("/api/download?os=windows&arch=x86_64"))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(body_json(response)["ok"], false);
+}

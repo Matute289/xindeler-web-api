@@ -1,12 +1,14 @@
 use crate::authclient::AuthClient;
 use crate::cache::TtlCache;
 use crate::config::AppConfig;
+use crate::download::{DownloadManifestClient, Manifest};
 use crate::game_server_client::GameServerClient;
 use crate::ratelimit::RateLimiter;
 use std::time::Duration;
 
 const STATUS_TTL: Duration = Duration::from_secs(30);
 const COUNT_TTL: Duration = Duration::from_secs(60);
+const DOWNLOADS_MANIFEST_TTL: Duration = Duration::from_secs(300);
 
 pub struct AppState {
     pub status_cache: TtlCache<(bool, String)>,
@@ -16,6 +18,8 @@ pub struct AppState {
     pub login_requests: RateLimiter,
     pub auth_client: AuthClient,
     pub game_server_client: GameServerClient,
+    pub downloads_manifest_client: DownloadManifestClient,
+    pub downloads_manifest_cache: TtlCache<Manifest>,
 }
 
 impl AppState {
@@ -33,6 +37,8 @@ impl AppState {
                 config.web_api_service_token(),
             ),
             game_server_client: GameServerClient::new(&config.game_server_player_api_url),
+            downloads_manifest_client: DownloadManifestClient::new(&config.downloads_manifest_url),
+            downloads_manifest_cache: TtlCache::new(DOWNLOADS_MANIFEST_TTL),
         }
     }
 }
