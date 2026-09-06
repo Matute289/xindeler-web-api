@@ -30,6 +30,7 @@ impl DownloadManifestClient {
         let client = reqwest::blocking::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("reqwest client config is always valid");
         Self {
@@ -43,7 +44,16 @@ impl DownloadManifestClient {
     /// missing manifest exactly like "no matching platform found", so there
     /// is nothing for a caller to branch on beyond presence/absence.
     pub fn fetch_manifest(&self) -> Option<Manifest> {
-        let response = self.client.get(&self.manifest_url).send().ok()?;
+        let response = match self.client.get(&self.manifest_url).send() {
+            Ok(response) => response,
+            Err(err) => {
+                log::warn!(
+                    "downloads manifest fetch failed for {}: {err}",
+                    self.manifest_url
+                );
+                return None;
+            }
+        };
         if !response.status().is_success() {
             log::warn!(
                 "downloads manifest fetch returned {}: {}",
@@ -52,7 +62,16 @@ impl DownloadManifestClient {
             );
             return None;
         }
-        response.json().ok()
+        match response.json() {
+            Ok(manifest) => Some(manifest),
+            Err(err) => {
+                log::warn!(
+                    "downloads manifest fetch returned malformed JSON from {}: {err}",
+                    self.manifest_url
+                );
+                None
+            }
+        }
     }
 }
 
@@ -62,7 +81,11 @@ impl DownloadManifestClient {
 pub(crate) fn detect_os(user_agent: &str) -> Option<&'static str> {
     if user_agent.contains("Windows") {
         Some("windows")
-    } else if user_agent.contains("Mac OS X") || user_agent.contains("Macintosh") {
+    } else if (user_agent.contains("Mac OS X") || user_agent.contains("Macintosh"))
+        && !user_agent.contains("iPhone")
+        && !user_agent.contains("iPad")
+        && !user_agent.contains("iPod")
+    {
         Some("macos")
     } else if user_agent.contains("Linux") && !user_agent.contains("Android") {
         Some("linux")
@@ -76,6 +99,11 @@ pub(crate) fn detect_os(user_agent: &str) -> Option<&'static str> {
 /// broadly compatible choice; a wrong guess is recoverable via the manual
 /// platform list on the frontend, unlike an undetected OS, which has no
 /// sane default across three unrelated platforms.
+///
+/// Known limitation shared with `detect_os`: iPadOS 13+ in its default
+/// "desktop site" mode sends a User-Agent that is byte-identical to a real
+/// Mac's, so it detects as macOS/x86_64 with no substring left to exclude
+/// on -- undetectable by design, not something to fix here.
 pub(crate) fn detect_arch(user_agent: &str) -> &'static str {
     if user_agent.contains("ARM64") || user_agent.contains("aarch64") {
         "arm64"
@@ -132,15 +160,17 @@ impl DownloadResolution {
 /// matching platform" are all the same `{ok: false}` (still HTTP 200)
 /// outcome, so there is no error state for the router to map.
 pub fn resolve_download(request: &Request, state: &AppState) -> Response {
-    let manifest = match state.downloads_manifest_cache.get() {
-        Some(manifest) => Some(manifest),
-        None => {
-            let fetched = state.downloads_manifest_client.fetch_manifest();
-            if let Some(manifest) = &fetched {
-                state.downloads_manifest_cache.set(manifest.clone());
-            }
-            fetched
+    let manifest = if let Some(manifest) = state.downloads_manifest_cache.get() {
+        Some(manifest)
+    } else if state.downloads_manifest_negative_cache.get().is_some() {
+        None
+    } else {
+        let fetched = state.downloads_manifest_client.fetch_manifest();
+        match &fetched {
+            Some(manifest) => state.downloads_manifest_cache.set(manifest.clone()),
+            None => state.downloads_manifest_negative_cache.set(()),
         }
+        fetched
     };
     let Some(manifest) = manifest else {
         return Response::json(&DownloadResolution::not_found());
@@ -210,6 +240,13 @@ mod tests {
     #[test]
     fn detects_no_os_for_an_unrecognized_user_agent() {
         assert_eq!(detect_os("curl/8.4.0"), None);
+    }
+
+    #[test]
+    fn detects_no_os_for_ios_despite_the_mac_os_x_substring() {
+        let iphone_ua =
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15";
+        assert_eq!(detect_os(iphone_ua), None);
     }
 
     #[test]

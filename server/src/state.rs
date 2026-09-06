@@ -9,6 +9,11 @@ use std::time::Duration;
 const STATUS_TTL: Duration = Duration::from_secs(30);
 const COUNT_TTL: Duration = Duration::from_secs(60);
 const DOWNLOADS_MANIFEST_TTL: Duration = Duration::from_secs(300);
+/// Shorter than `DOWNLOADS_MANIFEST_TTL` on purpose: caching a fetch
+/// *failure* still needs to stop hammering a stalled manifest host (see
+/// `resolve_download`), but a since-fixed manifest should recover quickly
+/// rather than staying "down" for the full 300s success TTL.
+const DOWNLOADS_MANIFEST_NEGATIVE_TTL: Duration = Duration::from_secs(30);
 
 pub struct AppState {
     pub status_cache: TtlCache<(bool, String)>,
@@ -20,6 +25,9 @@ pub struct AppState {
     pub game_server_client: GameServerClient,
     pub downloads_manifest_client: DownloadManifestClient,
     pub downloads_manifest_cache: TtlCache<Manifest>,
+    /// Presence within TTL means "a fetch was tried recently and failed" --
+    /// the `()` payload is unused, only the cache hit/miss matters.
+    pub downloads_manifest_negative_cache: TtlCache<()>,
 }
 
 impl AppState {
@@ -39,6 +47,7 @@ impl AppState {
             game_server_client: GameServerClient::new(&config.game_server_player_api_url),
             downloads_manifest_client: DownloadManifestClient::new(&config.downloads_manifest_url),
             downloads_manifest_cache: TtlCache::new(DOWNLOADS_MANIFEST_TTL),
+            downloads_manifest_negative_cache: TtlCache::new(DOWNLOADS_MANIFEST_NEGATIVE_TTL),
         }
     }
 }
