@@ -18,6 +18,7 @@ fn cors_origin(request: &Request) -> Option<&'static str> {
     match request.header("Origin")? {
         "https://xindeler.com" => Some("https://xindeler.com"),
         "https://www.xindeler.com" => Some("https://www.xindeler.com"),
+        "https://downloads.xindeler.com" => Some("https://downloads.xindeler.com"),
         "http://localhost:5173" => Some("http://localhost:5173"),
         "http://127.0.0.1:5173" => Some("http://127.0.0.1:5173"),
         _ => None,
@@ -274,6 +275,13 @@ mod tests {
     fn cors_origin_only_allows_known_origins() {
         let allowed = Request::fake("GET", "/ping").with_header("Origin", "https://xindeler.com");
         assert_eq!(cors_origin(&allowed), Some("https://xindeler.com"));
+
+        let downloads =
+            Request::fake("GET", "/ping").with_header("Origin", "https://downloads.xindeler.com");
+        assert_eq!(
+            cors_origin(&downloads),
+            Some("https://downloads.xindeler.com")
+        );
 
         let unknown =
             Request::fake("GET", "/ping").with_header("Origin", "https://evil.example.com");
