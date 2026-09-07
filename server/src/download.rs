@@ -112,13 +112,31 @@ pub(crate) fn detect_arch(user_agent: &str) -> &'static str {
     }
 }
 
+/// `xindeler-new-horizon`'s publish job is not internally consistent about
+/// this: the same manifest spells macOS's arm64 entry `"arm64"` but Linux's
+/// `"aarch64"` (confirmed against the real v0.25.2 manifest, not assumed) --
+/// our own request side always sends `"arm64"` (`detect_arch`, and the
+/// frontend's `toManifestArch`), so without this alias Linux ARM64 silently
+/// never resolves. Applied to both sides of the comparison in
+/// `resolve_platform` so it's correct regardless of which spelling either
+/// side happens to use.
+fn normalize_arch(arch: &str) -> &str {
+    if arch.eq_ignore_ascii_case("aarch64") {
+        "arm64"
+    } else {
+        arch
+    }
+}
+
 pub(crate) fn resolve_platform<'a>(
     manifest: &'a Manifest,
     os: &str,
     arch: &str,
 ) -> Option<&'a Platform> {
+    let arch = normalize_arch(arch);
     manifest.platforms.iter().find(|platform| {
-        platform.os.eq_ignore_ascii_case(os) && platform.arch.eq_ignore_ascii_case(arch)
+        platform.os.eq_ignore_ascii_case(os)
+            && normalize_arch(&platform.arch).eq_ignore_ascii_case(arch)
     })
 }
 
@@ -274,6 +292,35 @@ mod tests {
     fn resolve_platform_returns_none_for_a_combination_not_in_the_manifest() {
         let manifest = sample_manifest();
         assert!(resolve_platform(&manifest, "linux", "x86_64").is_none());
+    }
+
+    #[test]
+    fn resolves_aarch64_in_the_manifest_against_an_arm64_request() {
+        // Real incident (v0.25.2): xindeler-new-horizon's publish job emits
+        // "aarch64" for Linux but "arm64" for macOS in the same manifest --
+        // an inconsistency in their own naming, not a deliberate per-OS
+        // convention. Our request side always sends "arm64" (see
+        // `detect_arch` and the frontend's `toManifestArch`), so without
+        // this normalization Linux ARM64 silently never resolves.
+        let manifest = Manifest {
+            version: "v0.25.2".to_owned(),
+            platforms: vec![Platform {
+                os: "linux".into(),
+                arch: "aarch64".into(),
+                file: "xindeler-voxygen-linux-aarch64.tar.gz".into(),
+            }],
+        };
+        let platform = resolve_platform(&manifest, "linux", "arm64").unwrap();
+        assert_eq!(platform.file, "xindeler-voxygen-linux-aarch64.tar.gz");
+    }
+
+    #[test]
+    fn resolves_arm64_request_against_an_arm64_manifest_entry_unaffected_by_the_alias() {
+        // The alias must not break the already-working case (macOS, which
+        // already spells it "arm64" in the real manifest).
+        let manifest = sample_manifest();
+        let platform = resolve_platform(&manifest, "macos", "arm64").unwrap();
+        assert_eq!(platform.file, "xindeler-voxygen-macos-arm64.dmg");
     }
 
     #[test]
