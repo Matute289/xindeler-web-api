@@ -230,14 +230,17 @@ Lo que falta acá, concretamente, una vez que `xindeler-updater` publique su pro
   `launcher_download_url`, 4 tests de integración nuevos: explicit params, auto-detect por
   User-Agent, manifest inalcanzable, aislamiento de cachés). 85 tests en verde, clippy y fmt
   limpios.
-- [ ] Avisar a `xindeler-web-landing` (tarea 010 de su backlog, ya creada) cuando el endpoint esté
-  mergeado **y deployado** (este repo no tiene CD automático — hace falta tag + `deploy.sh`) para
-  que cambien el botón de descarga.
+- [x] Avisar a `xindeler-web-landing` (tarea 010 de su backlog) que el endpoint mergeó — hecho
+  2026-09-11. Sigue pendiente avisarles cuando además esté **deployado**, que es lo que de verdad
+  desbloquea esa tarea (mergear solo no alcanza, este repo no tiene CD automático).
 
-**Implementado 2026-09-11, código y tests completos — el manifest real de `xindeler-updater`
-todavía no existe** (`updater-latest.json` sigue en 404 al momento de escribir esto), así que en
-producción el endpoint nuevo va a responder `{ok:false}` hasta que ese repo publique su primera
-versión real — mismo comportamiento que tuvo `/api/download` antes de que NH-58 publicara
-`latest.json` por primera vez, no un bug. Sin mergear todavía, esperando ok de Matías. Deploy
-(tag + `deploy.sh`) queda para cuando Matías decida cortar versión, no automático al mergear (ver
-memoria de sesión sobre el criterio de tags).
+**Estado al 2026-09-11: PR #39 mergeado a `main` ([mergeado](https://github.com/Matute289/xindeler-web-api/pull/39)),
+código y tests completos, 85 tests en verde. Sin deployar todavía** — deploy (tag + `deploy.sh`)
+queda para cuando Matías decida cortar versión, no automático al mergear (ver memoria de sesión
+sobre el criterio de tags). Aparte, **el manifest real de `xindeler-updater` tampoco existe
+todavía**: su primer tag real (`v0.1.0`) corrió, Linux/macOS compilaron bien pero Windows falló
+(`makensis` no estaba en el PATH del runner, fix en su PR #4) y falta que Matías cargue los
+secrets de firma de Apple — así que aunque este repo se deploye ya, `updater-latest.json` sigue en
+404 hasta que ese PR mergee y se recorte el tag. Bloqueador real, cadena completa: `xindeler-updater`
+#4 mergea → tag real → `updater-latest.json` existe → (cuando Matías decida) este repo se deploya →
+`xindeler-web-landing` tarea 010 se desbloquea.
