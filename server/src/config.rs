@@ -98,7 +98,11 @@ pub struct AppConfig {
     /// Base URL for `xindeler-updater`'s own release manifest (NH-145) --
     /// same shape and caching model as `downloads_manifest_url`, deliberately
     /// a separate URL/cache so the game's `version` field never gets
-    /// confused with the launcher's.
+    /// confused with the launcher's. Nested under `updater-releases/` (not
+    /// at the static root, unlike the game's own `latest.json`) -- confirmed
+    /// directly against the real, live URL after `xindeler-updater` actually
+    /// published it (v0.1.0), not assumed from the original design spec,
+    /// which got this path wrong.
     pub updater_manifest_url: String,
 }
 
@@ -250,7 +254,9 @@ impl AppConfig {
         let updater_manifest_url = values
             .get("WEB_API_UPDATER_MANIFEST_URL")
             .cloned()
-            .unwrap_or_else(|| "https://downloads.xindeler.com/updater-latest.json".to_owned());
+            .unwrap_or_else(|| {
+                "https://downloads.xindeler.com/updater-releases/updater-latest.json".to_owned()
+            });
 
         Ok(Self {
             bind_addr,
