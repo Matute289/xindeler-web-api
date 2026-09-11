@@ -70,7 +70,7 @@ WEB_API_BIND_ADDR=127.0.0.1:8020 cargo run -p xindeler-web-api-server
 | `WEB_API_SERVICE_TOKEN` | — (opcional*) | Fase F: credencial *nueva*, nunca igual a `AUTH_SERVICE_TOKEN` (el arranque falla si coinciden), que este servicio presenta a `xindeler-auth` en `/issue-character-access-token`. *Requerido en la práctica para `/api/account/characters*` — sin él, esos endpoints responden 500 |
 | `WEB_API_GAME_SERVER_PLAYER_API_URL` | `http://127.0.0.1:14005` | Base URL del router `/player_api/v1` del game server (`xindeler-new-horizon` NH-79) — puerto HTTP loopback-only, distinto de `WEB_API_GAME_SERVER_ADDR` (que es el puerto TCP crudo que prueba `/api/status`) |
 | `WEB_API_DOWNLOADS_MANIFEST_URL` | `https://downloads.xindeler.com/latest.json` | URL del manifiesto de releases que resuelve `GET /api/download` |
-| `WEB_API_UPDATER_MANIFEST_URL` | `https://downloads.xindeler.com/updater-latest.json` | URL del manifiesto de `xindeler-updater` que resuelve `GET /api/download-launcher` (NH-145) |
+| `WEB_API_UPDATER_MANIFEST_URL` | `https://downloads.xindeler.com/updater-releases/updater-latest.json` | URL del manifiesto de `xindeler-updater` que resuelve `GET /api/download-launcher` (NH-145) |
 | `RUST_LOG` | *(sin logs)* | Nivel de log (`env_logger`), ej. `info` |
 
 ## Endpoints
