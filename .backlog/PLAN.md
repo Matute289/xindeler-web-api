@@ -195,3 +195,38 @@ así el corte de producción sale con todo andando de una, no en pedazos. Las cu
 completaron en ese orden y el corte de producción (B-05) se ejecutó al final, con confirmación
 explícita de Matías en cada paso que tocaba el VPS real (instalar systemd, tocar nginx, apagar el
 servicio Python).
+
+---
+
+## Pendiente, en cola — nuevo endpoint de descarga del launcher (NH-145, 2026-09-11)
+
+Coordinado desde `xindeler-new-horizon` (`docs/design/specs/2026-09-11-nh145-landing-download-launcher-switch-design.md`,
+repo privado `xindeler-design`) — Matías quiere que el botón de descarga de la landing entregue el
+instalador de **`xindeler-updater`** (el launcher), no el juego crudo. El launcher después baja el
+juego real vía el árbol `updater/` que ya expone `downloads.xindeler.com` (NH-60 en
+`xindeler-new-horizon`).
+
+**Decisión de Matías, ya tomada (2026-09-11): endpoint nuevo, no reapuntar `GET /api/download`**
+— así el campo `version` de la respuesta actual sigue significando "versión del juego" para
+cualquier otro consumidor, y no hay riesgo de romper algo que ya dependa de ese contrato.
+
+Lo que falta acá, concretamente, una vez que `xindeler-updater` publique su propio manifest al VPS
+(`downloads.xindeler.com/updater-releases/<version>/...`, `updater-latest.json`, misma forma
+`{version, platforms:[{os,arch,file}]}` que ya parsea `download.rs`):
+
+- [ ] Nuevo módulo o extensión de `download.rs`: un `DownloadManifestClient` (o reuso del mismo
+  tipo, apuntando a otra URL) para el manifest del updater.
+- [ ] Nuevo endpoint, ej. `GET /api/download-launcher` (nombre a confirmar) — mismo esqueleto de
+  detección de OS/arch por User-Agent que el existente, pero resolviendo contra el manifest del
+  updater y devolviendo URLs bajo `updater-releases/` en vez de `releases/`.
+- [ ] Nueva env var de config, ej. `WEB_API_UPDATER_MANIFEST_URL` (default
+  `https://downloads.xindeler.com/updater-latest.json`), siguiendo el mismo patrón que
+  `WEB_API_DOWNLOADS_MANIFEST_URL`.
+- [ ] Tests — mismo patrón que los existentes de `download.rs` (detección de OS/arch, resolución
+  de plataforma, construcción de URL), no reinventar la cobertura.
+- [ ] Avisar a `xindeler-web-landing` (tarea 010 de su backlog, ya creada) cuando el endpoint esté
+  mergeado y deployado, para que cambien el botón de descarga.
+
+**No implementado todavía** — bloqueado en que `xindeler-updater` publique primero su manifest al
+VPS (la clave SSH acotada al path `updater-releases/` ya está creada y verificada del lado del
+VPS/GitHub, ver NH-145).
