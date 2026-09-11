@@ -28,6 +28,12 @@ pub struct AppState {
     /// Presence within TTL means "a fetch was tried recently and failed" --
     /// the `()` payload is unused, only the cache hit/miss matters.
     pub downloads_manifest_negative_cache: TtlCache<()>,
+    /// NH-145: `xindeler-updater`'s own manifest, kept entirely separate
+    /// from the fields above -- a stalled updater manifest must never affect
+    /// the game download's own cache/negative-cache, and vice versa.
+    pub updater_manifest_client: DownloadManifestClient,
+    pub updater_manifest_cache: TtlCache<Manifest>,
+    pub updater_manifest_negative_cache: TtlCache<()>,
 }
 
 impl AppState {
@@ -48,6 +54,9 @@ impl AppState {
             downloads_manifest_client: DownloadManifestClient::new(&config.downloads_manifest_url),
             downloads_manifest_cache: TtlCache::new(DOWNLOADS_MANIFEST_TTL),
             downloads_manifest_negative_cache: TtlCache::new(DOWNLOADS_MANIFEST_NEGATIVE_TTL),
+            updater_manifest_client: DownloadManifestClient::new(&config.updater_manifest_url),
+            updater_manifest_cache: TtlCache::new(DOWNLOADS_MANIFEST_TTL),
+            updater_manifest_negative_cache: TtlCache::new(DOWNLOADS_MANIFEST_NEGATIVE_TTL),
         }
     }
 }

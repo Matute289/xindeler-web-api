@@ -214,19 +214,30 @@ Lo que falta acá, concretamente, una vez que `xindeler-updater` publique su pro
 (`downloads.xindeler.com/updater-releases/<version>/...`, `updater-latest.json`, misma forma
 `{version, platforms:[{os,arch,file}]}` que ya parsea `download.rs`):
 
-- [ ] Nuevo módulo o extensión de `download.rs`: un `DownloadManifestClient` (o reuso del mismo
-  tipo, apuntando a otra URL) para el manifest del updater.
-- [ ] Nuevo endpoint, ej. `GET /api/download-launcher` (nombre a confirmar) — mismo esqueleto de
-  detección de OS/arch por User-Agent que el existente, pero resolviendo contra el manifest del
-  updater y devolviendo URLs bajo `updater-releases/` en vez de `releases/`.
-- [ ] Nueva env var de config, ej. `WEB_API_UPDATER_MANIFEST_URL` (default
-  `https://downloads.xindeler.com/updater-latest.json`), siguiendo el mismo patrón que
+- [x] Nuevo módulo o extensión de `download.rs`: reuso directo de `DownloadManifestClient`
+  (apuntando a otra URL) para el manifest del updater — no hizo falta un tipo nuevo.
+- [x] Nuevo endpoint `GET /api/download-launcher` — mismo esqueleto de detección de OS/arch por
+  User-Agent que el existente, resolviendo contra el manifest del updater y devolviendo URLs bajo
+  `updater-releases/` en vez de `releases/` (`launcher_download_url()`).
+- [x] Nueva env var de config `WEB_API_UPDATER_MANIFEST_URL` (default
+  `https://downloads.xindeler.com/updater-latest.json`), mismo patrón que
   `WEB_API_DOWNLOADS_MANIFEST_URL`.
-- [ ] Tests — mismo patrón que los existentes de `download.rs` (detección de OS/arch, resolución
-  de plataforma, construcción de URL), no reinventar la cobertura.
+- [x] `AppState` gana `updater_manifest_client`/`updater_manifest_cache`/
+  `updater_manifest_negative_cache`, completamente separados de los del juego — un test de
+  integración nuevo (`download_launcher_manifest_failure_does_not_affect_the_game_download_cache`)
+  prueba explícitamente que un manifest del updater caído no afecta a `/api/download`.
+- [x] Tests — mismo patrón que los existentes de `download.rs` (unit test de
+  `launcher_download_url`, 4 tests de integración nuevos: explicit params, auto-detect por
+  User-Agent, manifest inalcanzable, aislamiento de cachés). 85 tests en verde, clippy y fmt
+  limpios.
 - [ ] Avisar a `xindeler-web-landing` (tarea 010 de su backlog, ya creada) cuando el endpoint esté
-  mergeado y deployado, para que cambien el botón de descarga.
+  mergeado **y deployado** (este repo no tiene CD automático — hace falta tag + `deploy.sh`) para
+  que cambien el botón de descarga.
 
-**No implementado todavía** — bloqueado en que `xindeler-updater` publique primero su manifest al
-VPS (la clave SSH acotada al path `updater-releases/` ya está creada y verificada del lado del
-VPS/GitHub, ver NH-145).
+**Implementado 2026-09-11, código y tests completos — el manifest real de `xindeler-updater`
+todavía no existe** (`updater-latest.json` sigue en 404 al momento de escribir esto), así que en
+producción el endpoint nuevo va a responder `{ok:false}` hasta que ese repo publique su primera
+versión real — mismo comportamiento que tuvo `/api/download` antes de que NH-58 publicara
+`latest.json` por primera vez, no un bug. Sin mergear todavía, esperando ok de Matías. Deploy
+(tag + `deploy.sh`) queda para cuando Matías decida cortar versión, no automático al mergear (ver
+memoria de sesión sobre el criterio de tags).
