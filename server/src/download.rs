@@ -147,6 +147,17 @@ pub(crate) fn download_url(manifest: &Manifest, platform: &Platform) -> String {
     )
 }
 
+/// NH-145: `xindeler-updater` publishes to a sibling path on the same VPS
+/// static root as the game itself (`updater-releases/` next to `releases/`),
+/// via its own dedicated, path-restricted deploy key -- never the game's
+/// `releases/` tree.
+pub(crate) fn launcher_download_url(manifest: &Manifest, platform: &Platform) -> String {
+    format!(
+        "{DOWNLOADS_BASE_URL}/updater-releases/{}/{}",
+        manifest.version, platform.file
+    )
+}
+
 #[derive(Serialize)]
 struct DownloadResolution {
     ok: bool,
@@ -169,6 +180,14 @@ impl DownloadResolution {
         Self {
             ok: true,
             download_url: Some(download_url(manifest, platform)),
+            version: Some(manifest.version.clone()),
+        }
+    }
+
+    fn found_launcher(manifest: &Manifest, platform: &Platform) -> Self {
+        Self {
+            ok: true,
+            download_url: Some(launcher_download_url(manifest, platform)),
             version: Some(manifest.version.clone()),
         }
     }
@@ -204,6 +223,42 @@ pub fn resolve_download(request: &Request, state: &AppState) -> Response {
 
     match resolve_platform(&manifest, &os, &arch) {
         Some(platform) => Response::json(&DownloadResolution::found(&manifest, platform)),
+        None => Response::json(&DownloadResolution::not_found()),
+    }
+}
+
+/// NH-145: same contract and OS/arch-detection logic as `resolve_download`,
+/// against `xindeler-updater`'s own manifest/cache instead of the game's --
+/// kept as its own endpoint (not a repoint of `GET /api/download`) so that
+/// endpoint's `version` field keeps meaning "game version" for any other
+/// consumer, per Matías's explicit call on NH-145.
+pub fn resolve_download_launcher(request: &Request, state: &AppState) -> Response {
+    let manifest = if let Some(manifest) = state.updater_manifest_cache.get() {
+        Some(manifest)
+    } else if state.updater_manifest_negative_cache.get().is_some() {
+        None
+    } else {
+        let fetched = state.updater_manifest_client.fetch_manifest();
+        match &fetched {
+            Some(manifest) => state.updater_manifest_cache.set(manifest.clone()),
+            None => state.updater_manifest_negative_cache.set(()),
+        }
+        fetched
+    };
+    let Some(manifest) = manifest else {
+        return Response::json(&DownloadResolution::not_found());
+    };
+
+    let user_agent = request.header("User-Agent").unwrap_or("");
+    let os = request
+        .get_param("os")
+        .unwrap_or_else(|| detect_os(user_agent).unwrap_or("").to_owned());
+    let arch = request
+        .get_param("arch")
+        .unwrap_or_else(|| detect_arch(user_agent).to_owned());
+
+    match resolve_platform(&manifest, &os, &arch) {
+        Some(platform) => Response::json(&DownloadResolution::found_launcher(&manifest, platform)),
         None => Response::json(&DownloadResolution::not_found()),
     }
 }
@@ -330,6 +385,16 @@ mod tests {
         assert_eq!(
             download_url(&manifest, platform),
             "https://downloads.xindeler.com/releases/v0.25.0/xindeler-voxygen-macos-arm64.dmg"
+        );
+    }
+
+    #[test]
+    fn builds_the_full_launcher_download_url() {
+        let manifest = sample_manifest();
+        let platform = resolve_platform(&manifest, "macos", "arm64").unwrap();
+        assert_eq!(
+            launcher_download_url(&manifest, platform),
+            "https://downloads.xindeler.com/updater-releases/v0.25.0/xindeler-voxygen-macos-arm64.dmg"
         );
     }
 }

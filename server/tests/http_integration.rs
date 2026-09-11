@@ -2069,3 +2069,105 @@ fn a_successful_manifest_fetch_is_cached_and_not_refetched_within_the_ttl() {
 
     assert_eq!(manifest_server.request_count(), 1);
 }
+
+// --- Launcher download resolver: GET /api/download-launcher (NH-145) ---
+
+const SAMPLE_LAUNCHER_MANIFEST: &str = r#"{
+    "version": "v1.0.0",
+    "platforms": [
+        {"os": "windows", "arch": "x86_64", "file": "xindeler-updater-windows-x86_64.exe"},
+        {"os": "macos", "arch": "arm64", "file": "xindeler-updater-macos-arm64.dmg"}
+    ]
+}"#;
+
+#[test]
+fn download_launcher_resolves_via_explicit_os_and_arch_params() {
+    let manifest_server =
+        FakeAuthServer::start(&[("/updater-latest.json", 200, SAMPLE_LAUNCHER_MANIFEST)]);
+    let server = TestServer::start_with(&[(
+        "WEB_API_UPDATER_MANIFEST_URL",
+        &format!("{}/updater-latest.json", manifest_server.base_url),
+    )]);
+    let response = Client::new()
+        .get(server.url("/api/download-launcher?os=windows&arch=x86_64"))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body = body_json(response);
+    assert_eq!(body["ok"], true);
+    assert_eq!(
+        body["download_url"],
+        "https://downloads.xindeler.com/updater-releases/v1.0.0/xindeler-updater-windows-x86_64.exe"
+    );
+    assert_eq!(body["version"], "v1.0.0");
+}
+
+#[test]
+fn download_launcher_auto_detects_from_the_user_agent() {
+    let manifest_server =
+        FakeAuthServer::start(&[("/updater-latest.json", 200, SAMPLE_LAUNCHER_MANIFEST)]);
+    let server = TestServer::start_with(&[(
+        "WEB_API_UPDATER_MANIFEST_URL",
+        &format!("{}/updater-latest.json", manifest_server.base_url),
+    )]);
+    let response = Client::new()
+        .get(server.url("/api/download-launcher"))
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        )
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body = body_json(response);
+    assert_eq!(body["ok"], true);
+    assert_eq!(
+        body["download_url"],
+        "https://downloads.xindeler.com/updater-releases/v1.0.0/xindeler-updater-windows-x86_64.exe"
+    );
+}
+
+#[test]
+fn download_launcher_returns_ok_false_when_the_manifest_is_unreachable() {
+    let server = TestServer::start_with(&[(
+        "WEB_API_UPDATER_MANIFEST_URL",
+        "http://127.0.0.1:1/updater-latest.json",
+    )]);
+    let response = Client::new()
+        .get(server.url("/api/download-launcher?os=windows&arch=x86_64"))
+        .send()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(body_json(response)["ok"], false);
+}
+
+#[test]
+fn download_launcher_manifest_failure_does_not_affect_the_game_download_cache() {
+    // The two endpoints must have fully independent caches -- an unreachable
+    // updater manifest (still unpublished at the time this endpoint shipped,
+    // see NH-145) must never make GET /api/download start failing too.
+    let game_manifest_server = FakeAuthServer::start(&[("/latest.json", 200, SAMPLE_MANIFEST)]);
+    let server = TestServer::start_with(&[
+        (
+            "WEB_API_DOWNLOADS_MANIFEST_URL",
+            &format!("{}/latest.json", game_manifest_server.base_url),
+        ),
+        (
+            "WEB_API_UPDATER_MANIFEST_URL",
+            "http://127.0.0.1:1/updater-latest.json",
+        ),
+    ]);
+    let client = Client::new();
+
+    let launcher_response = client
+        .get(server.url("/api/download-launcher?os=windows&arch=x86_64"))
+        .send()
+        .unwrap();
+    assert_eq!(body_json(launcher_response)["ok"], false);
+
+    let game_response = client
+        .get(server.url("/api/download?os=windows&arch=x86_64"))
+        .send()
+        .unwrap();
+    assert_eq!(body_json(game_response)["ok"], true);
+}

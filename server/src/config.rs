@@ -95,6 +95,11 @@ pub struct AppConfig {
     /// real production manifest; tests override this to point at a fake
     /// server instead.
     pub downloads_manifest_url: String,
+    /// Base URL for `xindeler-updater`'s own release manifest (NH-145) --
+    /// same shape and caching model as `downloads_manifest_url`, deliberately
+    /// a separate URL/cache so the game's `version` field never gets
+    /// confused with the launcher's.
+    pub updater_manifest_url: String,
 }
 
 impl AppConfig {
@@ -242,6 +247,11 @@ impl AppConfig {
             .cloned()
             .unwrap_or_else(|| "https://downloads.xindeler.com/latest.json".to_owned());
 
+        let updater_manifest_url = values
+            .get("WEB_API_UPDATER_MANIFEST_URL")
+            .cloned()
+            .unwrap_or_else(|| "https://downloads.xindeler.com/updater-latest.json".to_owned());
+
         Ok(Self {
             bind_addr,
             http_workers,
@@ -264,6 +274,7 @@ impl AppConfig {
             web_api_service_token,
             game_server_player_api_url,
             downloads_manifest_url,
+            updater_manifest_url,
         })
     }
 }
@@ -297,6 +308,7 @@ impl std::fmt::Debug for AppConfig {
                 &self.game_server_player_api_url,
             )
             .field("downloads_manifest_url", &self.downloads_manifest_url)
+            .field("updater_manifest_url", &self.updater_manifest_url)
             .finish()
     }
 }

@@ -104,6 +104,7 @@ fn dispatch(request: &Request, state: &AppState, network: &NetworkConfig) -> Res
         ("GET", "/ping") => ping(request),
         ("GET", "/api/status") => waitlist::server_status(state).unwrap_or_else(error::response),
         ("GET", "/api/download") => download::resolve_download(request, state),
+        ("GET", "/api/download-launcher") => download::resolve_download_launcher(request, state),
         ("GET", "/api/waitlist/count") => {
             waitlist::waitlist_count(state).unwrap_or_else(error::response)
         }
