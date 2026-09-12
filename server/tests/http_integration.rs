@@ -2193,4 +2193,12 @@ fn server_list_returns_the_official_server_with_the_expected_shape() {
     assert_eq!(official["auth_server"], "https://auth.xindeler.com");
     assert_eq!(official["official"], true);
     assert_eq!(official["channel"], "release");
+    // Regression: veloren-serverbrowser-api 0.4.0 (the crate xindeler-updater
+    // parses this with) serializes an absent location as JSON `null`, but its
+    // own deserializer can't parse that `null` back and panics on the whole
+    // list -- the real HTTP response must omit the key entirely instead.
+    assert!(
+        official.get("location").is_none(),
+        "location must be omitted, not null, when absent: {official:?}"
+    );
 }
