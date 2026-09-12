@@ -235,12 +235,59 @@ Lo que falta acá, concretamente, una vez que `xindeler-updater` publique su pro
   desbloquea esa tarea (mergear solo no alcanza, este repo no tiene CD automático).
 
 **Estado al 2026-09-11: PR #39 mergeado a `main` ([mergeado](https://github.com/Matute289/xindeler-web-api/pull/39)),
-código y tests completos, 85 tests en verde. Sin deployar todavía** — deploy (tag + `deploy.sh`)
-queda para cuando Matías decida cortar versión, no automático al mergear (ver memoria de sesión
-sobre el criterio de tags). Aparte, **el manifest real de `xindeler-updater` tampoco existe
-todavía**: su primer tag real (`v0.1.0`) corrió, Linux/macOS compilaron bien pero Windows falló
-(`makensis` no estaba en el PATH del runner, fix en su PR #4) y falta que Matías cargue los
-secrets de firma de Apple — así que aunque este repo se deploye ya, `updater-latest.json` sigue en
-404 hasta que ese PR mergee y se recorte el tag. Bloqueador real, cadena completa: `xindeler-updater`
-#4 mergea → tag real → `updater-latest.json` existe → (cuando Matías decida) este repo se deploya →
-`xindeler-web-landing` tarea 010 se desbloquea.
+código y tests completos, 85 tests en verde.**
+
+**Actualización 2026-09-12 (verificado en vivo, no asumido): toda la cadena está deployada y
+funcionando.** `curl https://downloads.xindeler.com/updater-releases/updater-latest.json` responde
+200 con el manifest real de `v0.1.0` (5 plataformas). `curl https://xindeler.com/api/download-launcher`
+responde 200 `{"ok":false}` sin un User-Agent de navegador real (esperado — no matchea plataforma sin
+OS/arch detectable), confirmando que el endpoint está deployado y respondiendo. Las notas previas
+sobre Windows fallido/manifest en 404/deploy pendiente quedaron obsoletas, ya se resolvieron. No
+verificado desde acá si `xindeler-web-landing` (tarea 010 de su backlog) ya cambió el botón para
+llamar a este endpoint — eso es front-end, no confirmable por curl.
+
+---
+
+## Pendiente, en cola — endpoint `/v1/servers` del directorio de servidores (NH-144, 2026-09-12)
+
+Coordinado desde `xindeler-new-horizon`
+(`docs/design/specs/2026-09-11-nh144-server-list-directory-design.md`, repo privado
+`xindeler-design`) — el launcher `xindeler-updater` ya tiene su panel de "Server Browser"
+funcionando del lado del cliente, apuntando a `https://serverlist.xindeler.com/v1/servers`. Ese
+dominio **ya resuelve por DNS** (apunta al mismo VPS, `216.238.126.97`) pero **no hay nada
+escuchando ahí todavía** — verificado en vivo 2026-09-12, `curl` a esa URL no conecta (sin
+respuesta HTTP). Efecto real reportado por el launcher: el buscador de servidores les muestra
+"Error fetching server list" a los jugadores salvo que hayan agregado servidores propios a mano.
+
+**Hallazgo clave del spec original**: esto es mucho más chico de lo que parece. El crate
+`veloren-serverbrowser-api` (Apache-2.0 OR MIT, seguro de usar) define un esquema puramente
+**estático**: `GameServer { name, address, port, description, location, auth_server, query_port,
+channel, official, extra }` — **sin ningún campo de jugadores en vivo**. Los datos en vivo
+(cantidad de jugadores, versión) los pide el propio cliente del launcher directamente a cada
+servidor listado, vía el protocolo UDP `query_server` (que `xindeler-new-horizon` ya expone por
+defecto en el puerto 14006, más el nuevo `Identity` request de NH-151 para confirmar que es
+realmente un server Xindeler). Veloren mismo resuelve esto igual: un repo aparte
+(`gitlab.com/veloren/serverbrowser`, GPLv3 — **no copiar código de ahí**, solo su arquitectura) con
+un `servers.ron` curado a mano, sin auto-registro.
+
+Lo que hace falta acá, concretamente:
+
+- [ ] **Confirmar routing**: ¿subdominio propio (`serverlist.xindeler.com`) enrutado a este
+  servicio, o un path bajo `xindeler.com`? El dominio ya existe y ya resuelve al mismo VPS que
+  este servicio — falta el vhost/config de nginx (o el arreglo equivalente) para que llegue acá,
+  y el handler en sí.
+- [ ] Agregar el crate `veloren-serverbrowser-api` (crates.io) como dependencia para los tipos
+  `GameServer`/`GameServerList` — no reinventar el schema.
+- [ ] Config estática (RON o JSON, commiteada a este repo, no una tabla de DB) con **una sola
+  entrada** para el server oficial: `server.xindeler.com`, puerto 14004, `query_port: 14006`,
+  `auth_server` (confirmar el valor exacto una vez que `auth.xindeler.com` resuelva — ver
+  bloqueador separado en `xindeler-auth`), `official: true`, `channel: "release"`.
+- [ ] `GET /v1/servers` — sirve esa config como `GameServerList` JSON. Público, sin auth,
+  sin necesidad de rate limiting especial más allá de lo que ya haya de baseline en este repo.
+- [ ] Explícitamente NO construir todavía: registro self-service, tabla de DB, UI de admin —
+  fuera de alcance para esta pasada (el placeholder `SERVER_LISTING_REQUEST_URL` del launcher, que
+  apunta a un issue de GitHub, ya cubre ese caso para terceros).
+
+**No implementado todavía — este es el gap real que le está mostrando el error a los jugadores
+hoy.** Ver el spec completo en `xindeler-design` para el detalle de por qué el diseño es
+deliberadamente chico (directorio estático + query en vivo por servidor, no auto-registro).
