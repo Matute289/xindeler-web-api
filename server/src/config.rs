@@ -104,6 +104,12 @@ pub struct AppConfig {
     /// published it (v0.1.0), not assumed from the original design spec,
     /// which got this path wrong.
     pub updater_manifest_url: String,
+    /// Base URL for the free, no-API-key GeoIP lookup used to auto-resolve
+    /// a listed server's `location` from its own address -- same service
+    /// `xindeler-updater` already validated client-side for manually added
+    /// servers. Tests override this to point at a fake server instead of
+    /// hitting the real service.
+    pub geoip_base_url: String,
 }
 
 impl AppConfig {
@@ -258,6 +264,11 @@ impl AppConfig {
                 "https://downloads.xindeler.com/updater-releases/updater-latest.json".to_owned()
             });
 
+        let geoip_base_url = values
+            .get("WEB_API_GEOIP_BASE_URL")
+            .cloned()
+            .unwrap_or_else(|| "https://ipwho.is".to_owned());
+
         Ok(Self {
             bind_addr,
             http_workers,
@@ -281,6 +292,7 @@ impl AppConfig {
             game_server_player_api_url,
             downloads_manifest_url,
             updater_manifest_url,
+            geoip_base_url,
         })
     }
 }
@@ -315,6 +327,7 @@ impl std::fmt::Debug for AppConfig {
             )
             .field("downloads_manifest_url", &self.downloads_manifest_url)
             .field("updater_manifest_url", &self.updater_manifest_url)
+            .field("geoip_base_url", &self.geoip_base_url)
             .finish()
     }
 }

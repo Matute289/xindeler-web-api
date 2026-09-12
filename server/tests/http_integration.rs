@@ -2176,7 +2176,10 @@ fn download_launcher_manifest_failure_does_not_affect_the_game_download_cache() 
 
 #[test]
 fn server_list_returns_the_official_server_with_the_expected_shape() {
-    let server = TestServer::start();
+    // Matches any path -- the real IP `server.xindeler.com` resolves to can
+    // change, so this doesn't hardcode it.
+    let geoip_server = FakeAuthServer::start(&[("/", 200, r#"{"country_code":"US"}"#)]);
+    let server = TestServer::start_with(&[("WEB_API_GEOIP_BASE_URL", &geoip_server.base_url)]);
 
     let response = Client::new().get(server.url("/v1/servers")).send().unwrap();
     assert_eq!(response.status(), 200);
@@ -2193,7 +2196,23 @@ fn server_list_returns_the_official_server_with_the_expected_shape() {
     assert_eq!(official["auth_server"], "https://auth.xindeler.com");
     assert_eq!(official["official"], true);
     assert_eq!(official["channel"], "release");
-    // One-time, hand-resolved lookup (server.xindeler.com -> Brazil), not
-    // live geolocation -- see the comment on `official_servers()`.
-    assert_eq!(official["location"], "BR");
+    // Resolved from the fake GeoIP server above, not hardcoded -- proves
+    // the auto-resolution path actually runs end to end.
+    assert_eq!(official["location"], "US");
+}
+
+#[test]
+fn server_list_omits_location_when_geoip_is_unreachable() {
+    // Port 1 on loopback refuses connections instantly -- deterministic
+    // failure with no dependency on real network access.
+    let server = TestServer::start_with(&[("WEB_API_GEOIP_BASE_URL", "http://127.0.0.1:1")]);
+
+    let response = Client::new().get(server.url("/v1/servers")).send().unwrap();
+    assert_eq!(response.status(), 200);
+    let body = body_json(response);
+    let official = &body["servers"][0];
+    assert!(
+        official.get("location").is_none(),
+        "location must be omitted, not null, when GeoIP resolution fails: {official:?}"
+    );
 }

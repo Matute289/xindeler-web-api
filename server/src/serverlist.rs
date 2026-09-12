@@ -1,6 +1,13 @@
 use crate::http::Response;
+use crate::state::AppState;
+use country_parser::Country;
 use serde_json::Value;
+use std::net::ToSocketAddrs;
+use std::time::Duration;
 use veloren_serverbrowser_api::{GameServer, GameServerList};
+
+const GEOIP_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+const GEOIP_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// A hand-maintained static directory, not a database table or a
 /// self-registration system — matches upstream Veloren's own
@@ -13,26 +20,59 @@ use veloren_serverbrowser_api::{GameServer, GameServerList};
 ///
 /// Add an entry here by hand for each additional officially-listed server;
 /// third-party listing requests go through the GitHub issue link
-/// `xindeler-updater` already points players at.
-///
-/// `location` is a one-time, hand-resolved lookup at add-time, not live
-/// geolocation -- `server.xindeler.com` resolves to `216.238.126.97`, hosted
-/// in São Paulo, Brazil (verified via `dig` + a GeoIP lookup, not guessed).
-/// If this server ever moves hosts, update this constant by hand; there is
-/// no automatic re-resolution.
-fn official_servers() -> Vec<GameServer> {
+/// `xindeler-updater` already points players at. `location` resolves
+/// automatically from `address` (see `official_location`) — never hardcode
+/// a country code here, it would silently go stale if this server ever
+/// moves hosts.
+fn official_servers(location: Option<Country>) -> Vec<GameServer> {
     vec![GameServer::new(
         "Xindeler",
         "server.xindeler.com",
         14004,
         Some(14006),
         "The official Xindeler server.",
-        country_parser::parse("BR"),
+        location,
         "https://auth.xindeler.com",
         Some("release"),
         true,
         Default::default(),
     )]
+}
+
+/// Resolves a server's location from its own address — the same
+/// one-time-lookup-at-add-time pattern `xindeler-updater` already validated
+/// client-side for manually added servers (DNS -> IP -> GeoIP, no live
+/// tracking, no API key). Never panics and never blocks the caller for long
+/// — DNS resolution failure, an unreachable GeoIP service, or an
+/// unparseable country code all just return `None`, which
+/// `strip_null_location` below turns into an omitted field rather than a
+/// broken `null`.
+fn resolve_location(address: &str, geoip_base_url: &str) -> Option<Country> {
+    let ip = (address, 0u16).to_socket_addrs().ok()?.next()?.ip();
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(GEOIP_CONNECT_TIMEOUT)
+        .timeout(GEOIP_REQUEST_TIMEOUT)
+        .build()
+        .ok()?;
+    let response = client.get(format!("{geoip_base_url}/{ip}")).send().ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body: Value = response.json().ok()?;
+    let code = body.get("country_code")?.as_str()?;
+    country_parser::parse(code)
+}
+
+/// Resolved once per process lifetime, on first request into
+/// `state.server_location_cache` — this data almost never changes (it only
+/// would if the official server moved hosts, which already requires a code
+/// change to `official_servers`'s hardcoded address anyway, and a restart
+/// naturally re-resolves it then), so there's no need for a TTL.
+fn official_location(state: &AppState) -> Option<Country> {
+    state
+        .server_location_cache
+        .get_or_init(|| resolve_location("server.xindeler.com", &state.geoip_base_url))
+        .clone()
 }
 
 /// `veloren-serverbrowser-api` 0.4.0's `location` field is asymmetric: it
@@ -58,9 +98,9 @@ fn strip_null_location(mut list: Value) -> Value {
     list
 }
 
-pub fn list_servers(_request: &crate::http::Request) -> Response {
+pub fn list_servers(_request: &crate::http::Request, state: &AppState) -> Response {
     let list = GameServerList {
-        servers: official_servers(),
+        servers: official_servers(official_location(state)),
     };
     match serde_json::to_value(&list) {
         Ok(value) => Response::json(&strip_null_location(value)),
@@ -74,7 +114,7 @@ mod tests {
 
     #[test]
     fn official_servers_lists_exactly_the_real_game_server() {
-        let servers = official_servers();
+        let servers = official_servers(country_parser::parse("BR"));
         assert_eq!(servers.len(), 1);
         let server = &servers[0];
         assert_eq!(server.address, "server.xindeler.com");
@@ -89,6 +129,25 @@ mod tests {
             server.location.as_ref().map(|c| c.iso2.as_str()),
             Some("BR")
         );
+    }
+
+    #[test]
+    fn resolve_location_returns_none_for_an_unresolvable_address() {
+        // No DNS lookup for this hostname will ever succeed -- proves the
+        // failure path returns `None` instead of panicking, without
+        // depending on network access.
+        assert_eq!(
+            resolve_location("this-host-does-not-exist.invalid", "https://ipwho.is"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_location_returns_none_when_the_geoip_service_is_unreachable() {
+        // Port 1 on loopback refuses connections instantly -- proves a
+        // dead GeoIP service degrades to `None` rather than panicking or
+        // hanging, without depending on network access or a live mock.
+        assert_eq!(resolve_location("127.0.0.1", "http://127.0.0.1:1"), None);
     }
 
     #[test]
@@ -115,16 +174,20 @@ mod tests {
         // 0.4.0 serializes an absent location as JSON `null`, but its own
         // deserializer can't parse that `null` back -- any client using
         // this crate to parse our response would panic on the whole list.
-        let list = GameServerList {
-            servers: official_servers(),
-        };
-        let value = strip_null_location(serde_json::to_value(&list).unwrap());
-        for server in value["servers"].as_array().unwrap() {
-            assert!(
-                server.get("location").is_none_or(|l| !l.is_null()),
-                "a server response must never contain an explicit `location: null` -- \
-                 veloren-serverbrowser-api 0.4.0's client can't deserialize that"
-            );
+        // Covers both outcomes of `official_location` (resolved or not),
+        // without depending on live network access.
+        for location in [country_parser::parse("BR"), None] {
+            let list = GameServerList {
+                servers: official_servers(location),
+            };
+            let value = strip_null_location(serde_json::to_value(&list).unwrap());
+            for server in value["servers"].as_array().unwrap() {
+                assert!(
+                    server.get("location").is_none_or(|l| !l.is_null()),
+                    "a server response must never contain an explicit `location: null` -- \
+                     veloren-serverbrowser-api 0.4.0's client can't deserialize that"
+                );
+            }
         }
     }
 }
