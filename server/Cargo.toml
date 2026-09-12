@@ -29,6 +29,12 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 # directory schema (no live player-count fields at all; those come from the
 # game's own query_server UDP protocol, requested client-side per server).
 veloren-serverbrowser-api = "0.4"
+# `Country` isn't re-exported by veloren-serverbrowser-api (only Field/
+# FieldContent/GameServer/GameServerList are) -- needed directly to
+# construct GameServer::new's `location` argument. Same version that crate
+# already pulls in transitively (see Cargo.lock), pinned explicitly rather
+# than left implicit.
+country-parser = "0.1"
 # Wire types only — never `xindeler-authc`, whose sign_in()/register()
 # helpers call net_prehash() internally on whatever they're given. This
 # service always receives an already-prehashed password from the frontend
