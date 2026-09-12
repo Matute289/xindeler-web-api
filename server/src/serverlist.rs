@@ -1,4 +1,5 @@
 use crate::http::Response;
+use serde_json::Value;
 use veloren_serverbrowser_api::{GameServer, GameServerList};
 
 /// A hand-maintained static directory, not a database table or a
@@ -28,10 +29,37 @@ fn official_servers() -> Vec<GameServer> {
     )]
 }
 
+/// `veloren-serverbrowser-api` 0.4.0's `location` field is asymmetric: it
+/// serializes an absent location as JSON `null` (`serialize_none()`), but
+/// its own deserializer calls `String::deserialize` directly on that same
+/// field, which cannot handle `null` -- any client using this crate to
+/// parse our response panics on the whole list, not just that field, the
+/// moment a server omits its location. Confirmed directly by reading the
+/// crate's `serialize_country`/`deserialize_country` functions, not just
+/// asserted. Since this is a bug in the crate itself, not our data, the fix
+/// lives here: drop `location` entirely from the JSON when it's `null`
+/// rather than relying on the crate's own (broken) round-trip.
+fn strip_null_location(mut list: Value) -> Value {
+    if let Some(servers) = list.get_mut("servers").and_then(Value::as_array_mut) {
+        for server in servers {
+            if let Some(map) = server.as_object_mut() {
+                if map.get("location").is_some_and(Value::is_null) {
+                    map.remove("location");
+                }
+            }
+        }
+    }
+    list
+}
+
 pub fn list_servers(_request: &crate::http::Request) -> Response {
-    Response::json(&GameServerList {
+    let list = GameServerList {
         servers: official_servers(),
-    })
+    };
+    match serde_json::to_value(&list) {
+        Ok(value) => Response::json(&strip_null_location(value)),
+        Err(_) => Response::json(&list),
+    }
 }
 
 #[cfg(test)]
@@ -51,5 +79,42 @@ mod tests {
         assert_eq!(server.query_port, Some(14006));
         assert_eq!(server.auth_server, "https://auth.xindeler.com");
         assert!(server.official);
+    }
+
+    #[test]
+    fn strip_null_location_removes_a_null_location_field() {
+        let list = serde_json::json!({
+            "servers": [{"name": "Xindeler", "location": null}]
+        });
+        let stripped = strip_null_location(list);
+        assert!(stripped["servers"][0].get("location").is_none());
+    }
+
+    #[test]
+    fn strip_null_location_leaves_a_real_location_untouched() {
+        let list = serde_json::json!({
+            "servers": [{"name": "Xindeler", "location": "US"}]
+        });
+        let stripped = strip_null_location(list);
+        assert_eq!(stripped["servers"][0]["location"], "US");
+    }
+
+    #[test]
+    fn the_real_response_never_contains_a_null_location() {
+        // Regression test for the actual bug: veloren-serverbrowser-api
+        // 0.4.0 serializes an absent location as JSON `null`, but its own
+        // deserializer can't parse that `null` back -- any client using
+        // this crate to parse our response would panic on the whole list.
+        let list = GameServerList {
+            servers: official_servers(),
+        };
+        let value = strip_null_location(serde_json::to_value(&list).unwrap());
+        for server in value["servers"].as_array().unwrap() {
+            assert!(
+                server.get("location").is_none_or(|l| !l.is_null()),
+                "a server response must never contain an explicit `location: null` -- \
+                 veloren-serverbrowser-api 0.4.0's client can't deserialize that"
+            );
+        }
     }
 }
