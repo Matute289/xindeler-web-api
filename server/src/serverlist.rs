@@ -14,6 +14,12 @@ use veloren_serverbrowser_api::{GameServer, GameServerList};
 /// Add an entry here by hand for each additional officially-listed server;
 /// third-party listing requests go through the GitHub issue link
 /// `xindeler-updater` already points players at.
+///
+/// `location` is a one-time, hand-resolved lookup at add-time, not live
+/// geolocation -- `server.xindeler.com` resolves to `216.238.126.97`, hosted
+/// in São Paulo, Brazil (verified via `dig` + a GeoIP lookup, not guessed).
+/// If this server ever moves hosts, update this constant by hand; there is
+/// no automatic re-resolution.
 fn official_servers() -> Vec<GameServer> {
     vec![GameServer::new(
         "Xindeler",
@@ -21,7 +27,7 @@ fn official_servers() -> Vec<GameServer> {
         14004,
         Some(14006),
         "The official Xindeler server.",
-        None,
+        country_parser::parse("BR"),
         "https://auth.xindeler.com",
         Some("release"),
         true,
@@ -79,6 +85,10 @@ mod tests {
         assert_eq!(server.query_port, Some(14006));
         assert_eq!(server.auth_server, "https://auth.xindeler.com");
         assert!(server.official);
+        assert_eq!(
+            server.location.as_ref().map(|c| c.iso2.as_str()),
+            Some("BR")
+        );
     }
 
     #[test]
