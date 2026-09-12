@@ -25,6 +25,10 @@ ipnet = "2"
 csv = "1"
 uuid = { version = "1", default-features = false, features = ["serde", "v4"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
+# Wire types only (NH-144) — GameServer/GameServerList, a purely static
+# directory schema (no live player-count fields at all; those come from the
+# game's own query_server UDP protocol, requested client-side per server).
+veloren-serverbrowser-api = "0.4"
 # Wire types only — never `xindeler-authc`, whose sign_in()/register()
 # helpers call net_prehash() internally on whatever they're given. This
 # service always receives an already-prehashed password from the frontend

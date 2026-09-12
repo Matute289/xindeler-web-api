@@ -2171,3 +2171,26 @@ fn download_launcher_manifest_failure_does_not_affect_the_game_download_cache() 
         .unwrap();
     assert_eq!(body_json(game_response)["ok"], true);
 }
+
+// --- Server list directory: GET /v1/servers ---
+
+#[test]
+fn server_list_returns_the_official_server_with_the_expected_shape() {
+    let server = TestServer::start();
+
+    let response = Client::new().get(server.url("/v1/servers")).send().unwrap();
+    assert_eq!(response.status(), 200);
+    let body = body_json(response);
+    let servers = body["servers"]
+        .as_array()
+        .expect("servers must be an array");
+    assert_eq!(servers.len(), 1);
+    let official = &servers[0];
+    assert_eq!(official["name"], "Xindeler");
+    assert_eq!(official["address"], "server.xindeler.com");
+    assert_eq!(official["port"], 14004);
+    assert_eq!(official["query_port"], 14006);
+    assert_eq!(official["auth_server"], "https://auth.xindeler.com");
+    assert_eq!(official["official"], true);
+    assert_eq!(official["channel"], "release");
+}

@@ -14,6 +14,7 @@ mod mailer;
 mod migrate_csv;
 mod privacy;
 mod ratelimit;
+mod serverlist;
 mod session;
 mod state;
 mod totp_status;

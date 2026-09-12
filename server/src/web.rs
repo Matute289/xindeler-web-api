@@ -3,6 +3,7 @@ use crate::config::NetworkConfig;
 use crate::download;
 use crate::error::{self, ApiError};
 use crate::http::{serve, BodyError, Request, Response};
+use crate::serverlist;
 use crate::session;
 use crate::state::AppState;
 use crate::waitlist;
@@ -105,6 +106,7 @@ fn dispatch(request: &Request, state: &AppState, network: &NetworkConfig) -> Res
         ("GET", "/api/status") => waitlist::server_status(state).unwrap_or_else(error::response),
         ("GET", "/api/download") => download::resolve_download(request, state),
         ("GET", "/api/download-launcher") => download::resolve_download_launcher(request, state),
+        ("GET", "/v1/servers") => serverlist::list_servers(request),
         ("GET", "/api/waitlist/count") => {
             waitlist::waitlist_count(state).unwrap_or_else(error::response)
         }
