@@ -4,6 +4,8 @@ use crate::config::AppConfig;
 use crate::download::{DownloadManifestClient, Manifest};
 use crate::game_server_client::GameServerClient;
 use crate::ratelimit::RateLimiter;
+use country_parser::Country;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 const STATUS_TTL: Duration = Duration::from_secs(30);
@@ -34,6 +36,13 @@ pub struct AppState {
     pub updater_manifest_client: DownloadManifestClient,
     pub updater_manifest_cache: TtlCache<Manifest>,
     pub updater_manifest_negative_cache: TtlCache<()>,
+    pub geoip_base_url: String,
+    /// Resolved at most once per process lifetime -- see
+    /// `serverlist::official_location`. A plain field (not a `TtlCache`)
+    /// since a fresh `AppState` per test run means no cross-test
+    /// contamination, and production only ever needs one resolution per
+    /// deploy.
+    pub server_location_cache: OnceLock<Option<Country>>,
 }
 
 impl AppState {
@@ -57,6 +66,8 @@ impl AppState {
             updater_manifest_client: DownloadManifestClient::new(&config.updater_manifest_url),
             updater_manifest_cache: TtlCache::new(DOWNLOADS_MANIFEST_TTL),
             updater_manifest_negative_cache: TtlCache::new(DOWNLOADS_MANIFEST_NEGATIVE_TTL),
+            geoip_base_url: config.geoip_base_url.clone(),
+            server_location_cache: OnceLock::new(),
         }
     }
 }
