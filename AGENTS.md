@@ -7,7 +7,7 @@ contribuidores, estado del servidor de juego, y sesión web autenticada.
 
 - URL de producción (futura, tras el corte de Fase 1): `https://xindeler.com/api/*`
 - Repo GitHub: `Matute289/xindeler-web-api` (público)
-- VPS: `greenmountain.dev` (`216.238.126.97`) — mismo VPS que `xindeler-auth` y
+- VPS: `greenmountain.dev` (Hostinger, `179.199.154.145`; migrado desde Vultr el 2026-10-10) — mismo VPS que `xindeler-auth` y
   `xindeler-new-horizon`
 - **Reemplaza**: `/srv/xindeler/waitlist-api/main.py` (FastAPI en Python, nunca versionado en
   git, persistencia en CSV) — ver `.backlog/SPEC.md` para el detalle de la migración
