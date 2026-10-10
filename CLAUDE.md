@@ -7,7 +7,7 @@ contribuidores, estado del servidor de juego, y sesión web autenticada.
 
 - URL de producción (futura, tras el corte de Fase 1): `https://xindeler.com/api/*`
 - Repo GitHub: `Matute289/xindeler-web-api` (público)
-- VPS: `greenmountain.dev` (`216.238.126.97`) — mismo VPS que `xindeler-auth` y
+- VPS: `greenmountain.dev` (Hostinger, `179.199.154.145`; migrado desde Vultr el 2026-10-10) — mismo VPS que `xindeler-auth` y
   `xindeler-new-horizon`
 - **Reemplaza**: `/srv/xindeler/waitlist-api/main.py` (FastAPI en Python, nunca versionado en
   git, persistencia en CSV) — ver `.backlog/SPEC.md` para el detalle de la migración
@@ -143,7 +143,7 @@ segundo es el mismo secreto que ya usa el game server contra `xindeler-auth`, `/
 Mismo patrón que `xindeler-auth`/`xindeler-zuul` (mismo VPS, mismo operador, misma historia "sin
 Docker, systemd + reemplazo atómico de binario") — una sola forma de operar entre los tres.
 
-- VPS: `216.238.126.97` (`greenmountain.dev`), deployado por el usuario `mgrinberg` (no un usuario
+- VPS: `greenmountain.dev` (Hostinger, `179.199.154.145`), deployado por el usuario `mgrinberg` (no un usuario
   de servicio dedicado, a diferencia de `xindeler-zuul`).
 - Deploy path: `/opt/xindeler-web-api/`. El servicio corre como `xindeler-web-api.service`
   (systemd), bindeado a `127.0.0.1:8020` — nginx expone `/api/*` de `xindeler.com` proxeando ahí.
