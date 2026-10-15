@@ -1,0 +1,25 @@
+# Version updates (weekly). Security updates are separate: they open a PR as soon as an advisory
+# with a patched version appears (repo setting "Dependabot security updates").
+version: 2
+updates:
+  # Rust: only Cargo.lock moves (Cargo.toml requirements are left alone), all minor/patch bumps in one PR.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    versioning-strategy: lockfile-only
+    open-pull-requests-limit: 3
+    groups:
+      rust-dependencies:
+        patterns: ["*"]
+    commit-message:
+      prefix: "fix(deps)"
+
+  # GitHub Actions versions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci(deps)"
