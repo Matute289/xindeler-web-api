@@ -25,7 +25,7 @@ jobs:
       # with read-only access to Matute289/xindeler-auth — same pattern
       # xindeler-new-horizon uses for the same dependency.
       - name: Authorize access to the private auth dependency
-        uses: webfactory/ssh-agent@v0.9.0
+        uses: webfactory/ssh-agent@v0.10.0
         with:
           ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
 
