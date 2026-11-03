@@ -25,9 +25,22 @@ jobs:
       # with read-only access to Matute289/xindeler-auth — same pattern
       # xindeler-new-horizon uses for the same dependency.
       - name: Authorize access to the private auth dependency
+        if: github.actor != 'dependabot[bot]'
         uses: webfactory/ssh-agent@v0.10.0
         with:
           ssh-private-key: ${{ secrets.AUTH_REPO_SSH_KEY }}
+
+      # Workflow runs started by Dependabot cannot read normal Actions secrets
+      # (only Dependabot secrets), so the deploy key above is empty for them.
+      # They use the read-only DEPENDABOT_GIT_TOKEN instead, by rewriting the
+      # ssh:// URL of the private dependency to https.
+      - name: Authorize access to the private auth dependency (Dependabot)
+        if: github.actor == 'dependabot[bot]'
+        env:
+          GIT_TOKEN: ${{ secrets.DEPENDABOT_GIT_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
